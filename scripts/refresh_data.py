@@ -287,52 +287,154 @@ def get_2026_scorecard_urls():
     return urls
 
 def split_scorecard_sections(lines):
-    """Return batting and bowling blocks from Cricbuzz stripped text."""
+    """
+    Parse Cricbuzz scorecard text robustly.
+
+    Cricbuzz can split role and dismissal markup into separate text nodes:
+      Philip Salt | (c & wk) | not out | 47 | 37 | 2 | 1 | 127.03
+    or:
+      Matthew Short | c | Chris Jordan | b | Daniel Worrall |
+      20 | 15 | 4 | 0 | 133.33
+
+    Find the five numeric fields first instead of assuming a fixed number of
+    text nodes between player name and statistics.
+    """
     batting, bowling = [], []
     i = 0
+
+    def is_int_token(x):
+        return bool(re.fullmatch(r"\d+", str(x).strip()))
+
+    def is_float_token(x):
+        return bool(re.fullmatch(r"\d+(?:\.\d+)?", str(x).strip().replace("−", "-")))
+
+    def find_five_numbers(start_idx, max_lookahead=16):
+        upper = min(len(lines) - 4, start_idx + max_lookahead)
+        for k in range(start_idx, upper):
+            vals = lines[k:k+5]
+            if (
+                len(vals) == 5
+                and is_int_token(vals[0])
+                and is_int_token(vals[1])
+                and is_int_token(vals[2])
+                and is_int_token(vals[3])
+                and is_float_token(vals[4])
+            ):
+                return k
+        return None
+
     while i < len(lines):
-        if lines[i] == "Batter" and i + 5 < len(lines) and lines[i+1:i+6] == ["R","B","4s","6s","SR"]:
+        # Batting section: name + arbitrary role/dismissal nodes + 5 numbers.
+        if (
+            lines[i] == "Batter"
+            and i + 5 < len(lines)
+            and lines[i+1:i+6] == ["R", "B", "4s", "6s", "SR"]
+        ):
             i += 6
             rows = []
-            while i < len(lines) and lines[i] not in {"Extras","Bowler","Total","Did not Bat"}:
-                # Batter block is name, dismissal, R, B, 4s, 6s, SR.
-                if i + 6 >= len(lines):
-                    break
-                name = clean_role(lines[i])
-                dismissal = lines[i+1]
+
+            while i < len(lines) and lines[i] not in {
+                "Extras", "Bowler", "Total", "Did not Bat", "INFO"
+            }:
+                raw_name = lines[i].strip()
+                if not raw_name:
+                    i += 1
+                    continue
+
+                numeric_at = find_five_numbers(i + 1)
+                if numeric_at is None:
+                    i += 1
+                    continue
+
+                name = clean_role(raw_name)
+                middle = lines[i+1:numeric_at]
+                dismissal = clean_role(" ".join(middle))
+
+                if not name:
+                    i += 1
+                    continue
+
                 try:
-                    runs = int(lines[i+2]); balls = int(lines[i+3])
-                    fours = int(lines[i+4]); sixes = int(lines[i+5])
-                    float(lines[i+6].replace("−","-"))
+                    runs = int(lines[numeric_at])
+                    balls = int(lines[numeric_at + 1])
+                    fours = int(lines[numeric_at + 2])
+                    sixes = int(lines[numeric_at + 3])
+                    float(lines[numeric_at + 4].replace("−", "-"))
                 except Exception:
                     i += 1
                     continue
-                dismissed = "not out" not in dismissal.lower() and "retired hurt" not in dismissal.lower()
-                rows.append({"name":name,"runs":runs,"balls":balls,"fours":fours,"sixes":sixes,"dismissed":dismissed})
-                i += 7
+
+                d = dismissal.lower()
+                dismissed = not (
+                    "not out" in d
+                    or "retired hurt" in d
+                    or "absent hurt" in d
+                )
+
+                rows.append({
+                    "name": name,
+                    "runs": runs,
+                    "balls": balls,
+                    "fours": fours,
+                    "sixes": sixes,
+                    "dismissed": dismissed,
+                })
+                i = numeric_at + 5
+
             if rows:
                 batting.append(rows)
             continue
 
-        if lines[i] == "Bowler" and i + 5 < len(lines) and lines[i+1:i+6] == ["B","D","R","W","RPB"]:
+        # Bowling section: name + 5 numbers (B, D, R, W, RPB).
+        if (
+            lines[i] == "Bowler"
+            and i + 5 < len(lines)
+            and lines[i+1:i+6] == ["B", "D", "R", "W", "RPB"]
+        ):
             i += 6
             rows = []
-            while i < len(lines) and lines[i] not in {"Fall of Wickets","Batter","INFO","Partnerships"}:
-                if i + 5 >= len(lines):
-                    break
-                name = clean_role(lines[i])
+
+            while i < len(lines) and lines[i] not in {
+                "Fall of Wickets", "Batter", "INFO", "Partnerships"
+            }:
+                raw_name = lines[i].strip()
+                if not raw_name:
+                    i += 1
+                    continue
+
+                numeric_at = find_five_numbers(i + 1, max_lookahead=8)
+                if numeric_at is None:
+                    i += 1
+                    continue
+
+                name = clean_role(raw_name)
+                if not name:
+                    i += 1
+                    continue
+
                 try:
-                    balls = int(lines[i+1]); runs = int(lines[i+3]); wkts = int(lines[i+4])
-                    float(lines[i+5].replace("−","-"))
+                    balls = int(lines[numeric_at])
+                    runs = int(lines[numeric_at + 2])
+                    wkts = int(lines[numeric_at + 3])
+                    float(lines[numeric_at + 4].replace("−", "-"))
                 except Exception:
                     i += 1
                     continue
-                rows.append({"name":name,"balls":balls,"runs":runs,"wickets":wkts})
-                i += 6
+
+                rows.append({
+                    "name": name,
+                    "balls": balls,
+                    "runs": runs,
+                    "wickets": wkts,
+                })
+                i = numeric_at + 5
+
             if rows:
                 bowling.append(rows)
             continue
+
         i += 1
+
     return batting, bowling
 
 def aggregate_cricbuzz_2026(stats):
@@ -554,6 +656,8 @@ def main():
             "error": str(e)
         }
 
+    salt_historical_runs = stats.get("psalt", {}).get("runs", 0) if stats else 0
+
     if stats:
         try:
             parsed_2026, discovered_2026 = aggregate_cricbuzz_2026(stats)
@@ -562,7 +666,11 @@ def main():
                 "url": CRICBUZZ_TABLE,
                 "status": "ok",
                 "last_success": refreshed,
-                "detail": f"{parsed_2026} scorecards with data / {discovered_2026} discovered"
+                "detail": (
+                    f"{parsed_2026} scorecards with data / {discovered_2026} discovered; "
+                    f"Phil Salt 2026 runs added: "
+                    f"{stats.get('psalt', {}).get('runs', 0) - salt_historical_runs}"
+                )
             }
         except Exception as e:
             failures.append(f"current_matches: {e}")
@@ -612,7 +720,9 @@ def main():
             ]
             failures.append(
                 f"validation: Phil Salt total is {salt['runs'] if salt else 'missing'}, "
-                f"expected at least 1294; salt-like rows: {salt_like}"
+                f"expected at least 1294; historical={salt_historical_runs}; "
+                f"2026_added={stats.get('psalt', {}).get('runs', 0) - salt_historical_runs}; "
+                f"salt-like rows: {salt_like}"
             )
 
     data = {
