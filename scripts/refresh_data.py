@@ -241,33 +241,41 @@ def aggregate_cricsheet_through_2025():
     return stats, match_count
 
 def get_2026_scorecard_urls():
-    html = get(CRICBUZZ_MATCHES).text
-    # Pull all score links belonging to this series from static HTML.
-    links = re.findall(
-        r'href="(/live-cricket-scores/\d+/[^"]*the-hundred-mens-competition-2026[^"]*)"',
-        html, flags=re.I
+    html = get(CRICBUZZ_TABLE).text
+
+    # The series "matches" page only exposes a small rolling window of nearby
+    # fixtures in static HTML. The points table, however, links every completed
+    # result for every team. Extract those result links and deduplicate by
+    # Cricbuzz match id.
+    hrefs = re.findall(
+        r'href=["\']([^"\']*/live-cricket-(?:scores|scorecard)/\d+/[^"\']*the-hundred-mens-competition-2026[^"\']*)["\']',
+        html,
+        flags=re.I
     )
+
     urls = []
     seen = set()
-    for link in links:
-        sc = link.replace("/live-cricket-scores/", "/live-cricket-scorecard/")
-        full = CRICBUZZ_BASE + sc
-        mid = re.search(r"/live-cricket-scorecard/(\d+)/", full)
-        if mid and mid.group(1) not in seen:
-            seen.add(mid.group(1)); urls.append(full)
+    for href in hrefs:
+        if href.startswith("http"):
+            full = href
+        else:
+            full = CRICBUZZ_BASE + (href if href.startswith("/") else "/" + href)
 
-    # Fallback: Cricbuzz sometimes emits scorecard links directly.
-    for link in re.findall(
-        r'href="(/live-cricket-scorecard/\d+/[^"]*the-hundred-mens-competition-2026[^"]*)"',
-        html, flags=re.I
-    ):
-        full = CRICBUZZ_BASE + link
+        full = full.replace("/live-cricket-scores/", "/live-cricket-scorecard/")
         mid = re.search(r"/live-cricket-scorecard/(\d+)/", full)
-        if mid and mid.group(1) not in seen:
-            seen.add(mid.group(1)); urls.append(full)
+        if not mid:
+            continue
+        match_id = mid.group(1)
+        if match_id in seen:
+            continue
+        seen.add(match_id)
+        urls.append(full)
 
     if len(urls) < 20:
-        raise RuntimeError(f"Only found {len(urls)} 2026 scorecards; expected at least 20 by this point in the tournament.")
+        raise RuntimeError(
+            f"Only found {len(urls)} unique 2026 scorecard links on the points table; "
+            "expected at least 20 completed/current matches."
+        )
     return urls
 
 def split_scorecard_sections(lines):
@@ -408,41 +416,62 @@ def build_tables(stats):
 
 def cricbuzz_standings():
     html = get(CRICBUZZ_TABLE).text
-    text = " ".join(BeautifulSoup(html, "html.parser").stripped_strings)
+    soup = BeautifulSoup(html, "html.parser")
+    tokens = [re.sub(r"\s+", " ", x).strip() for x in soup.stripped_strings]
 
-    # Parse each known team independently. Opponent entries elsewhere on the
-    # page are followed by dates/results, not six consecutive table numbers,
-    # so requiring P W L NR Pts NRR cleanly identifies the ranking row.
     found = {}
-    for code, team_name in TEAM_NAMES.items():
-        pattern = re.compile(
-            rf"(?<![A-Z]){re.escape(code)}(?:\([A-Z]\))?\s+"
-            rf"(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+([+\-]?\d+\.\d+)"
-        )
-        candidates = pattern.findall(text)
-        valid = []
-        for p, w, l, nr, pts, nrr in candidates:
-            p, w, l, nr, pts = map(int, (p, w, l, nr, pts))
-            nrr = float(nrr)
-            # Basic competition sanity checks to discard any accidental match.
-            if 0 <= p <= 8 and 0 <= w <= p and 0 <= l <= p and 0 <= nr <= p:
-                if w + l + nr <= p and 0 <= pts <= 32:
-                    valid.append((p, w, l, nr, pts, nrr))
-        if valid:
-            # There should be one standings row. If duplicates appear, prefer
-            # the row with most games played, then most points.
-            p, w, l, nr, pts, nrr = sorted(valid, key=lambda x:(x[0], x[4]), reverse=True)[0]
-            found[code] = {
-                "team": team_name, "code": code,
-                "p": p, "w": w, "l": l, "nr": nr,
-                "pts": pts, "nrr": nrr
-            }
+    code_re = re.compile(r"^(TRE|MIL|WEF|MSG|SUL|SOU|LDN|BRM)(?:\([A-Z]+\))?$")
+
+    # A genuine standings row appears as:
+    # CODE, P, W, L, NR, Pts, NRR
+    # immediately after the code token. Opponent references elsewhere on the
+    # page are followed by a date/result instead, so they fail this test.
+    for i, tok in enumerate(tokens):
+        m = code_re.fullmatch(tok)
+        if not m or i + 6 >= len(tokens):
+            continue
+
+        code = m.group(1)
+        vals = tokens[i+1:i+7]
+        try:
+            p = int(vals[0])
+            w = int(vals[1])
+            l = int(vals[2])
+            nr = int(vals[3])
+            pts = int(vals[4])
+            nrr = float(vals[5].replace("−", "-"))
+        except (ValueError, TypeError):
+            continue
+
+        if not (0 <= p <= 8 and 0 <= w <= p and 0 <= l <= p and 0 <= nr <= p):
+            continue
+        if w + l + nr > p or not (0 <= pts <= 32) or not (-10 <= nrr <= 10):
+            continue
+
+        found[code] = {
+            "team": TEAM_NAMES[code],
+            "code": code,
+            "p": p,
+            "w": w,
+            "l": l,
+            "nr": nr,
+            "pts": pts,
+            "nrr": nrr,
+        }
 
     if len(found) != 8:
         missing = sorted(set(TEAM_NAMES) - set(found))
+        # Include nearby tokens for missing team codes to make the next log
+        # directly diagnostic if Cricbuzz changes markup again.
+        diagnostics = {}
+        for code in missing:
+            diagnostics[code] = [
+                tokens[j:j+8] for j,t in enumerate(tokens)
+                if t == code or t.startswith(code + "(")
+            ][:3]
         raise RuntimeError(
             f"Could not parse all 8 standings rows; found {len(found)}: "
-            f"{sorted(found)}; missing: {missing}"
+            f"{sorted(found)}; missing: {missing}; nearby tokens: {diagnostics}"
         )
 
     rows = list(found.values())
@@ -481,8 +510,8 @@ def main():
         try:
             parsed_2026, discovered_2026 = aggregate_cricbuzz_2026(stats)
             source_status["current_matches"] = {
-                "name": "Cricbuzz – 2026 scorecards",
-                "url": CRICBUZZ_MATCHES,
+                "name": "Cricbuzz – 2026 scorecards discovered via points-table results",
+                "url": CRICBUZZ_TABLE,
                 "status": "ok",
                 "last_success": refreshed,
                 "detail": f"{parsed_2026} scorecards with data / {discovered_2026} discovered"
@@ -490,8 +519,8 @@ def main():
         except Exception as e:
             failures.append(f"current_matches: {e}")
             source_status["current_matches"] = {
-                "name": "Cricbuzz – 2026 scorecards",
-                "url": CRICBUZZ_MATCHES,
+                "name": "Cricbuzz – 2026 scorecards discovered via points-table results",
+                "url": CRICBUZZ_TABLE,
                 "status": "error",
                 "last_success": None,
                 "error": str(e)
