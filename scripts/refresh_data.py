@@ -58,7 +58,15 @@ def get(url, timeout=35):
     return r
 
 def clean_role(name):
-    name = re.sub(r"\s*\((?:c|wk|c/wk|wk/c)\)\s*", " ", str(name), flags=re.I)
+    name = str(name)
+    # Remove any parenthetical player-role marker containing captain/wicketkeeper
+    # tokens, including "(c & wk)", "(c)", "(wk)", "(c/wk)", "(wk/c)".
+    name = re.sub(
+        r"\s*\([^)]*(?:\bc\b|\bwk\b)[^)]*\)\s*",
+        " ",
+        name,
+        flags=re.I
+    )
     name = re.sub(r"\s+", " ", name).strip()
     return name
 
@@ -420,55 +428,95 @@ def cricbuzz_standings():
     tokens = [re.sub(r"\s+", " ", x).strip() for x in soup.stripped_strings]
 
     found = {}
-    code_re = re.compile(r"^(TRE|MIL|WEF|MSG|SUL|SOU|LDN|BRM)(?:\([A-Z]+\))?$")
+    code_re = re.compile(r"^(TRE|MIL|WEF|MSG|SUL|SOU|LDN|BRM)(?:\s*\([A-Z]+\))?$")
 
-    # A genuine standings row appears as:
-    # CODE, P, W, L, NR, Pts, NRR
-    # immediately after the code token. Opponent references elsewhere on the
-    # page are followed by a date/result instead, so they fail this test.
-    for i, tok in enumerate(tokens):
-        m = code_re.fullmatch(tok)
-        if not m or i + 6 >= len(tokens):
+    def numeric(tok):
+        tok = tok.replace("−", "-")
+        if re.fullmatch(r"[+\-]?\d+\.\d+", tok):
+            return float(tok)
+        if re.fullmatch(r"\d+", tok):
+            return int(tok)
+        return None
+
+    # Every actual table row ends immediately before an "Opposition" heading.
+    # Search backwards from that heading to find:
+    # rank, team code/status, P, W, L, NR, Pts, NRR
+    for opp_i, tok in enumerate(tokens):
+        if tok != "Opposition":
             continue
 
-        code = m.group(1)
-        vals = tokens[i+1:i+7]
-        try:
-            p = int(vals[0])
-            w = int(vals[1])
-            l = int(vals[2])
-            nr = int(vals[3])
-            pts = int(vals[4])
-            nrr = float(vals[5].replace("−", "-"))
-        except (ValueError, TypeError):
+        window_start = max(0, opp_i - 18)
+        window = tokens[window_start:opp_i]
+
+        code_pos = None
+        code = None
+        # Use the LAST team-code-like token before "Opposition".
+        # That avoids unrelated navigation text earlier in the window.
+        for j in range(len(window) - 1, -1, -1):
+            m = code_re.fullmatch(window[j])
+            if m:
+                code_pos = j
+                code = m.group(1)
+                break
+
+        if code is None:
+            # Some Cricbuzz markup may split "LDN(E)" into "LDN" and "(E)".
+            for j in range(len(window) - 1, -1, -1):
+                if window[j] in TEAM_NAMES:
+                    code_pos = j
+                    code = window[j]
+                    break
+
+        if code is None:
             continue
 
-        if not (0 <= p <= 8 and 0 <= w <= p and 0 <= l <= p and 0 <= nr <= p):
+        nums = []
+        for x in window[code_pos + 1:]:
+            v = numeric(x)
+            if v is not None:
+                nums.append(v)
+
+        # Ranking row must contribute exactly/sufficiently:
+        # P W L NR Pts NRR. If markup added another token, use the final six
+        # numeric values immediately preceding "Opposition".
+        if len(nums) < 6:
             continue
-        if w + l + nr > p or not (0 <= pts <= 32) or not (-10 <= nrr <= 10):
+        p_, w_, l_, nr_, pts_, nrr_ = nums[-6:]
+
+        if not all(isinstance(v, int) for v in [p_, w_, l_, nr_, pts_]):
+            continue
+        if not isinstance(nrr_, (int, float)):
+            continue
+
+        p_, w_, l_, nr_, pts_, nrr_ = (
+            int(p_), int(w_), int(l_), int(nr_), int(pts_), float(nrr_)
+        )
+
+        if not (0 <= p_ <= 8 and 0 <= w_ <= p_ and 0 <= l_ <= p_ and 0 <= nr_ <= p_):
+            continue
+        if w_ + l_ + nr_ > p_ or not (0 <= pts_ <= 32) or not (-10 <= nrr_ <= 10):
             continue
 
         found[code] = {
             "team": TEAM_NAMES[code],
             "code": code,
-            "p": p,
-            "w": w,
-            "l": l,
-            "nr": nr,
-            "pts": pts,
-            "nrr": nrr,
+            "p": p_,
+            "w": w_,
+            "l": l_,
+            "nr": nr_,
+            "pts": pts_,
+            "nrr": nrr_,
         }
 
     if len(found) != 8:
         missing = sorted(set(TEAM_NAMES) - set(found))
-        # Include nearby tokens for missing team codes to make the next log
-        # directly diagnostic if Cricbuzz changes markup again.
         diagnostics = {}
         for code in missing:
             diagnostics[code] = [
-                tokens[j:j+8] for j,t in enumerate(tokens)
+                tokens[max(0, j-3):j+10]
+                for j, t in enumerate(tokens)
                 if t == code or t.startswith(code + "(")
-            ][:3]
+            ][-3:]
         raise RuntimeError(
             f"Could not parse all 8 standings rows; found {len(found)}: "
             f"{sorted(found)}; missing: {missing}; nearby tokens: {diagnostics}"
@@ -557,9 +605,14 @@ def main():
             # Historical Cricsheet may retain an abbreviated display name.
             salt = next((x for x in batting if person_key(x["player"]) == "psalt"), None)
         if not salt or salt["runs"] < 1294:
+            salt_like = [
+                (x["player"], x["runs"])
+                for x in batting
+                if "salt" in x["player"].lower()
+            ]
             failures.append(
                 f"validation: Phil Salt total is {salt['runs'] if salt else 'missing'}, "
-                "expected at least 1294"
+                f"expected at least 1294; salt-like rows: {salt_like}"
             )
 
     data = {
