@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 import zipfile
 from collections import defaultdict
 from datetime import datetime, timezone
-from io import BytesIO
 from pathlib import Path
 
 import requests
@@ -17,7 +15,6 @@ DATA_FILE = ROOT / "data" / "current.json"
 
 CRICSHEET_HUNDRED = "https://cricsheet.org/downloads/hnd_json.zip"
 CRICSHEET_LOCAL_CANDIDATES = [ROOT / "data" / "hnd_json.zip", ROOT / "hnd_json.zip"]
-CRICBUZZ_MATCHES = "https://www.cricbuzz.com/cricket-series/11493/the-hundred-mens-competition-2026/matches"
 CRICBUZZ_TABLE = "https://www.cricbuzz.com/cricket-series/11493/the-hundred-mens-competition-2026/points-table"
 CRICBUZZ_BASE = "https://www.cricbuzz.com"
 
@@ -39,15 +36,26 @@ TEAM_NAMES = {
     "BRM": "Birmingham Phoenix",
 }
 
-LINEAGE = {
-    "Oval Invincibles": "MI London",
-    "Manchester Originals": "Manchester Super Giants",
-    "Northern Superchargers": "SunRisers Leeds",
+TEAM_ALIASES = {
+    "Trent Rockets": "TRE",
+    "Oval Invincibles": "MIL",
+    "MI London": "MIL",
+    "Welsh Fire": "WEF",
+    "Manchester Originals": "MSG",
+    "Manchester Super Giants": "MSG",
+    "Northern Superchargers": "SUL",
+    "Sunrisers Leeds": "SUL",
+    "SunRisers Leeds": "SUL",
+    "Southern Brave": "SOU",
+    "London Spirit": "LDN",
+    "Birmingham Phoenix": "BRM",
 }
 
 NON_BOWLER_WICKETS = {
     "run out", "retired hurt", "retired out", "obstructing the field"
 }
+
+PHASE_LABELS = ["1–25", "26–50", "51–75", "76–100"]
 
 def now():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -59,19 +67,16 @@ def get(url, timeout=35):
 
 def clean_role(name):
     name = str(name)
-    # Remove any parenthetical player-role marker containing captain/wicketkeeper
-    # tokens, including "(c & wk)", "(c)", "(wk)", "(c/wk)", "(wk/c)".
     name = re.sub(
         r"\s*\([^)]*(?:\bc\b|\bwk\b)[^)]*\)\s*",
         " ",
         name,
-        flags=re.I
+        flags=re.I,
     )
-    name = re.sub(r"\s+", " ", name).strip()
+    name = re.sub(r"\s+", " ", name).strip(" ,")
     return name
 
 def person_key(name):
-    """Merge scorecard full names with Cricsheet initial+surname names."""
     n = clean_role(name)
     n = re.sub(r"[^A-Za-z0-9' -]", "", n).strip()
     parts = [p for p in n.split() if p]
@@ -79,8 +84,10 @@ def person_key(name):
         return ""
     surname = re.sub(r"[^a-z0-9]", "", parts[-1].lower())
     first = re.sub(r"[^a-z0-9]", "", parts[0].lower())
-    initial = first[:1]
-    return initial + surname
+    return first[:1] + surname
+
+def team_code(name):
+    return TEAM_ALIASES.get(str(name).strip())
 
 def new_player():
     return {
@@ -102,229 +109,350 @@ def new_player():
         "best_runs": 9999,
     }
 
-def ensure(stats, name, prefer_name=False):
+def ensure(stats, display_names, name, prefer_name=False):
     key = person_key(name)
     if not key:
         return None, None
     rec = stats.setdefault(key, new_player())
     clean = clean_role(name)
-    # Prefer current-season full names over historic initials.
+    current = display_names.get(key, "")
+    if prefer_name or not current or len(clean) > len(current):
+        display_names[key] = clean
     if prefer_name or not rec["display"] or len(clean) > len(rec["display"]):
         rec["display"] = clean
     return key, rec
 
-def add_match_appearance(stats, name, seen):
-    key, rec = ensure(stats, name)
+def add_match_appearance(stats, display_names, name, seen, prefer_name=False):
+    key, rec = ensure(stats, display_names, name, prefer_name=prefer_name)
     if key and key not in seen:
         rec["matches"] += 1
         seen.add(key)
 
-def add_batting_innings(stats, rows, prefer_name=False):
+def add_batting_innings(stats, display_names, rows, prefer_name=False):
     for row in rows:
-        key, rec = ensure(stats, row["name"], prefer_name=prefer_name)
+        key, rec = ensure(stats, display_names, row["name"], prefer_name=prefer_name)
         if not key:
             continue
         rec["innings"] += 1
-        rec["runs"] += row["runs"]
-        rec["balls"] += row["balls"]
-        rec["fours"] += row.get("fours", 0)
-        rec["sixes"] += row.get("sixes", 0)
+        rec["runs"] += int(row["runs"])
+        rec["balls"] += int(row["balls"])
+        rec["fours"] += int(row.get("fours", 0))
+        rec["sixes"] += int(row.get("sixes", 0))
         if row.get("dismissed", False):
             rec["dismissals"] += 1
-        score = row["runs"]
+        score = int(row["runs"])
         not_out = not row.get("dismissed", False)
         if score > rec["high_score"] or (score == rec["high_score"] and not_out):
             rec["high_score"] = score
             rec["not_out_high"] = not_out
 
-def add_bowling_innings(stats, rows, prefer_name=False):
+def add_bowling_innings(stats, display_names, rows, prefer_name=False):
     for row in rows:
-        key, rec = ensure(stats, row["name"], prefer_name=prefer_name)
+        key, rec = ensure(stats, display_names, row["name"], prefer_name=prefer_name)
         if not key:
             continue
         rec["bowling_innings"] += 1
-        rec["balls_bowled"] += row["balls"]
-        rec["runs_conceded"] += row["runs"]
-        rec["wickets"] += row["wickets"]
-        w, r = row["wickets"], row["runs"]
+        rec["balls_bowled"] += int(row["balls"])
+        rec["runs_conceded"] += int(row["runs"])
+        rec["wickets"] += int(row["wickets"])
+        w, r = int(row["wickets"]), int(row["runs"])
         if w > rec["best_wickets"] or (w == rec["best_wickets"] and r < rec["best_runs"]):
             rec["best_wickets"], rec["best_runs"] = w, r
 
-def aggregate_cricsheet_through_2025():
-    # Historical data is kept in the repository because Cricsheet's download
-    # endpoint can challenge GitHub-hosted runners. Accept the archive either
-    # under data/ (preferred) or at repository root (backward-compatible).
+def canonical_pair(a, b):
+    return tuple(sorted((a, b)))
+
+def add_h2h(h2h, a, b, winner=None, result=None):
+    if not a or not b or a == b:
+        return
+    x, y = canonical_pair(a, b)
+    rec = h2h.setdefault((x, y), {
+        "a": x, "b": y, "games": 0, "a_wins": 0, "b_wins": 0, "ties": 0, "no_results": 0
+    })
+    rec["games"] += 1
+    if winner == x:
+        rec["a_wins"] += 1
+    elif winner == y:
+        rec["b_wins"] += 1
+    elif result == "tie":
+        rec["ties"] += 1
+    else:
+        rec["no_results"] += 1
+
+def innings_totals(innings):
+    runs = 0
+    wickets = 0
+    legal = 0
+    for over in innings.get("overs", []) or []:
+        for d in over.get("deliveries", []) or []:
+            runs += int((d.get("runs", {}) or {}).get("total", 0) or 0)
+            extras = d.get("extras", {}) or {}
+            if "wides" not in extras and "noballs" not in extras:
+                legal += 1
+            wickets += len(d.get("wickets", []) or [])
+    return runs, wickets, legal
+
+def aggregate_cricsheet():
     archive = next((x for x in CRICSHEET_LOCAL_CANDIDATES if x.exists()), None)
     if archive is None:
-        checked = ", ".join(str(x.relative_to(ROOT)) for x in CRICSHEET_LOCAL_CANDIDATES)
-        raise RuntimeError(
-            f"Missing Cricsheet archive. Checked: {checked}. "
-            "Upload hnd_json.zip without extracting it."
-        )
-    size = archive.stat().st_size
-    if size < 500_000:
-        raise RuntimeError(
-            f"{archive.relative_to(ROOT)} is only {size} bytes; expected the "
-            "Cricsheet Hundred JSON archive (roughly 1 MB+)."
-        )
+        raise RuntimeError("Missing hnd_json.zip in repository root or data/.")
+    if archive.stat().st_size < 500_000:
+        raise RuntimeError("hnd_json.zip is unexpectedly small.")
+
     stats = {}
-    match_count = 0
-    z = zipfile.ZipFile(archive)
-    for name in z.namelist():
-        if not name.endswith(".json"):
-            continue
-        try:
-            obj = json.loads(z.read(name))
-        except Exception:
-            continue
-        info = obj.get("info", {})
-        if str(info.get("gender", "")).lower() not in {"male", "men"}:
-            continue
-        event = info.get("event", {}) or {}
-        event_name = str(event.get("name", ""))
-        if "Hundred" not in event_name:
-            continue
-        season = info.get("season")
-        try:
-            season_num = int(str(season)[:4])
-        except Exception:
-            continue
-        if season_num > 2025:
-            continue
+    display_names = {}
+    historical_h2h = {}
+    player_matchups = defaultdict(lambda: {
+        "balls": 0, "runs": 0, "dots": 0, "fours": 0, "sixes": 0, "dismissals": 0
+    })
+    phase = defaultdict(lambda: [defaultdict(int) for _ in range(4)])
+    venue_team = defaultdict(lambda: defaultdict(lambda: {"matches": 0, "wins": 0}))
+    venue_summary = defaultdict(lambda: {
+        "matches": 0, "first_innings_runs": 0, "chase_wins": 0, "defend_wins": 0, "other": 0
+    })
+    latest_bbb_date = None
+    historical_count = 0
+    total_mens_matches = 0
 
-        match_count += 1
-        seen = set()
-        for team, plist in (info.get("players", {}) or {}).items():
-            for player in plist or []:
-                add_match_appearance(stats, player, seen)
+    with zipfile.ZipFile(archive) as z:
+        for filename in z.namelist():
+            if not filename.endswith(".json"):
+                continue
+            try:
+                obj = json.loads(z.read(filename))
+            except Exception:
+                continue
 
-        for innings in obj.get("innings", []) or []:
-            bat_seen = set()
-            bowl_seen = set()
-            bat_rows = defaultdict(lambda: {"runs":0,"balls":0,"fours":0,"sixes":0,"dismissed":False})
-            bowl_rows = defaultdict(lambda: {"balls":0,"runs":0,"wickets":0})
+            info = obj.get("info", {}) or {}
+            if str(info.get("gender", "")).lower() not in {"male", "men"}:
+                continue
+            event_name = str((info.get("event", {}) or {}).get("name", ""))
+            if "Hundred" not in event_name:
+                continue
 
-            for over in innings.get("overs", []) or []:
-                for d in over.get("deliveries", []) or []:
-                    batter = d.get("batter")
-                    bowler = d.get("bowler")
-                    if batter:
-                        b = bat_rows[batter]
-                        br = int((d.get("runs", {}) or {}).get("batter", 0) or 0)
-                        b["runs"] += br
+            teams_raw = info.get("teams", []) or []
+            if len(teams_raw) != 2:
+                continue
+            codes = [team_code(t) for t in teams_raw]
+            if not all(codes):
+                continue
+
+            total_mens_matches += 1
+            season = info.get("season")
+            try:
+                season_num = int(str(season)[:4])
+            except Exception:
+                continue
+
+            dates = info.get("dates", []) or []
+            date_str = str(dates[0]) if dates else None
+            if date_str and (latest_bbb_date is None or date_str > latest_bbb_date):
+                latest_bbb_date = date_str
+
+            # Maintain display-name lookup for every Cricsheet match, including
+            # the available 2026 ball-by-ball portion.
+            for team, plist in (info.get("players", {}) or {}).items():
+                for player in plist or []:
+                    key = person_key(player)
+                    if key:
+                        display_names.setdefault(key, clean_role(player))
+
+            # Team/venue and player matchup analytics use all ball-by-ball
+            # currently present in the uploaded Cricsheet archive.
+            venue = str(info.get("venue", "Unknown venue"))
+            winner_raw = (info.get("outcome", {}) or {}).get("winner")
+            winner_code = team_code(winner_raw) if winner_raw else None
+            result = str((info.get("outcome", {}) or {}).get("result", "")).lower()
+            venue_summary[venue]["matches"] += 1
+            for c in codes:
+                venue_team[venue][c]["matches"] += 1
+                if c == winner_code:
+                    venue_team[venue][c]["wins"] += 1
+
+            inn_list = obj.get("innings", []) or []
+            if inn_list:
+                first_runs, _, _ = innings_totals(inn_list[0])
+                venue_summary[venue]["first_innings_runs"] += first_runs
+                if winner_code:
+                    second_team = team_code(inn_list[1].get("team")) if len(inn_list) > 1 else None
+                    if winner_code == second_team:
+                        venue_summary[venue]["chase_wins"] += 1
+                    else:
+                        venue_summary[venue]["defend_wins"] += 1
+                else:
+                    venue_summary[venue]["other"] += 1
+
+            for innings in inn_list:
+                batting_code = team_code(innings.get("team"))
+                legal_ball = 0
+                for over in innings.get("overs", []) or []:
+                    for d in over.get("deliveries", []) or []:
+                        batter = d.get("batter")
+                        bowler = d.get("bowler")
+                        runs_obj = d.get("runs", {}) or {}
+                        br = int(runs_obj.get("batter", 0) or 0)
+                        total = int(runs_obj.get("total", 0) or 0)
                         extras = d.get("extras", {}) or {}
-                        if "wides" not in extras:
-                            b["balls"] += 1
-                        if br == 4: b["fours"] += 1
-                        if br == 6: b["sixes"] += 1
-                        bat_seen.add(batter)
 
-                    if bowler:
-                        bw = bowl_rows[bowler]
+                        if batter and bowler:
+                            bk, wk = person_key(batter), person_key(bowler)
+                            if bk and wk:
+                                m = player_matchups[(bk, wk)]
+                                if "wides" not in extras:
+                                    m["balls"] += 1
+                                m["runs"] += br
+                                if "wides" not in extras and total == 0:
+                                    m["dots"] += 1
+                                if br == 4:
+                                    m["fours"] += 1
+                                if br == 6:
+                                    m["sixes"] += 1
+                                for w in d.get("wickets", []) or []:
+                                    if (
+                                        person_key(w.get("player_out", "")) == bk
+                                        and str(w.get("kind", "")).lower() not in NON_BOWLER_WICKETS
+                                    ):
+                                        m["dismissals"] += 1
+
+                        if batting_code:
+                            # Phase progression uses legal deliveries; total runs
+                            # still include extras on the delivery.
+                            phase_index = min(3, legal_ball // 25)
+                            phase[batting_code][phase_index]["runs"] += total
+                            for w in d.get("wickets", []) or []:
+                                phase[batting_code][phase_index]["wickets"] += 1
+                            if "wides" not in extras and "noballs" not in extras:
+                                phase[batting_code][phase_index]["balls"] += 1
+                                legal_ball += 1
+
+            # Career totals and historical team H2H are frozen at end-2025;
+            # 2026 is layered from current scorecards to avoid double-counting.
+            if season_num > 2025:
+                continue
+
+            historical_count += 1
+            outcome = info.get("outcome", {}) or {}
+            add_h2h(
+                historical_h2h,
+                codes[0], codes[1],
+                winner=team_code(outcome.get("winner")) if outcome.get("winner") else None,
+                result=str(outcome.get("result", "")).lower(),
+            )
+
+            seen = set()
+            for _, plist in (info.get("players", {}) or {}).items():
+                for player in plist or []:
+                    add_match_appearance(stats, display_names, player, seen)
+
+            for innings in inn_list:
+                bat_rows = defaultdict(lambda: {
+                    "runs": 0, "balls": 0, "fours": 0, "sixes": 0, "dismissed": False
+                })
+                bowl_rows = defaultdict(lambda: {"balls": 0, "runs": 0, "wickets": 0})
+
+                for over in innings.get("overs", []) or []:
+                    for d in over.get("deliveries", []) or []:
+                        batter = d.get("batter")
+                        bowler = d.get("bowler")
+                        runs_obj = d.get("runs", {}) or {}
                         extras = d.get("extras", {}) or {}
-                        if "wides" not in extras and "noballs" not in extras:
-                            bw["balls"] += 1
-                        total = int((d.get("runs", {}) or {}).get("total", 0) or 0)
-                        non_bowler = int(extras.get("byes", 0) or 0) + int(extras.get("legbyes", 0) or 0) + int(extras.get("penalty", 0) or 0)
-                        bw["runs"] += max(0, total - non_bowler)
-                        bowl_seen.add(bowler)
 
-                    for w in d.get("wickets", []) or []:
-                        out = w.get("player_out")
-                        kind = str(w.get("kind", "")).lower()
-                        if out:
-                            bat_rows[out]["dismissed"] = kind != "retired hurt"
-                        if bowler and kind not in NON_BOWLER_WICKETS:
-                            bowl_rows[bowler]["wickets"] += 1
+                        if batter:
+                            b = bat_rows[batter]
+                            br = int(runs_obj.get("batter", 0) or 0)
+                            b["runs"] += br
+                            if "wides" not in extras:
+                                b["balls"] += 1
+                            b["fours"] += int(br == 4)
+                            b["sixes"] += int(br == 6)
 
-            add_batting_innings(stats, [
-                {"name":n, **r} for n,r in bat_rows.items()
-            ])
-            add_bowling_innings(stats, [
-                {"name":n, **r} for n,r in bowl_rows.items()
-            ])
+                        if bowler:
+                            bw = bowl_rows[bowler]
+                            if "wides" not in extras and "noballs" not in extras:
+                                bw["balls"] += 1
+                            total = int(runs_obj.get("total", 0) or 0)
+                            non_bowler = (
+                                int(extras.get("byes", 0) or 0)
+                                + int(extras.get("legbyes", 0) or 0)
+                                + int(extras.get("penalty", 0) or 0)
+                            )
+                            bw["runs"] += max(0, total - non_bowler)
 
-    if match_count < 150:
-        raise RuntimeError(f"Cricsheet men's Hundred historical sample looks incomplete: {match_count} matches")
-    return stats, match_count
+                        for w in d.get("wickets", []) or []:
+                            out = w.get("player_out")
+                            kind = str(w.get("kind", "")).lower()
+                            if out:
+                                bat_rows[out]["dismissed"] = kind != "retired hurt"
+                            if bowler and kind not in NON_BOWLER_WICKETS:
+                                bowl_rows[bowler]["wickets"] += 1
+
+                add_batting_innings(
+                    stats, display_names,
+                    [{"name": n, **r} for n, r in bat_rows.items()]
+                )
+                add_bowling_innings(
+                    stats, display_names,
+                    [{"name": n, **r} for n, r in bowl_rows.items()]
+                )
+
+    if historical_count < 150:
+        raise RuntimeError(f"Historical men's sample too small: {historical_count}")
+
+    return {
+        "stats": stats,
+        "display_names": display_names,
+        "historical_h2h": historical_h2h,
+        "player_matchups": player_matchups,
+        "phase": phase,
+        "venue_team": venue_team,
+        "venue_summary": venue_summary,
+        "latest_bbb_date": latest_bbb_date,
+        "historical_count": historical_count,
+        "total_mens_matches": total_mens_matches,
+    }
 
 def get_2026_scorecard_urls():
     html = get(CRICBUZZ_TABLE).text
-
-    # The series "matches" page only exposes a small rolling window of nearby
-    # fixtures in static HTML. The points table, however, links every completed
-    # result for every team. Extract those result links and deduplicate by
-    # Cricbuzz match id.
     hrefs = re.findall(
         r'href=["\']([^"\']*/live-cricket-(?:scores|scorecard)/\d+/[^"\']*the-hundred-mens-competition-2026[^"\']*)["\']',
         html,
-        flags=re.I
+        flags=re.I,
     )
-
-    urls = []
-    seen = set()
+    urls, seen = [], set()
     for href in hrefs:
-        if href.startswith("http"):
-            full = href
-        else:
-            full = CRICBUZZ_BASE + (href if href.startswith("/") else "/" + href)
-
+        full = href if href.startswith("http") else CRICBUZZ_BASE + (href if href.startswith("/") else "/" + href)
         full = full.replace("/live-cricket-scores/", "/live-cricket-scorecard/")
         mid = re.search(r"/live-cricket-scorecard/(\d+)/", full)
-        if not mid:
-            continue
-        match_id = mid.group(1)
-        if match_id in seen:
-            continue
-        seen.add(match_id)
-        urls.append(full)
-
+        if mid and mid.group(1) not in seen:
+            seen.add(mid.group(1))
+            urls.append(full)
     if len(urls) < 20:
-        raise RuntimeError(
-            f"Only found {len(urls)} unique 2026 scorecard links on the points table; "
-            "expected at least 20 completed/current matches."
-        )
+        raise RuntimeError(f"Only found {len(urls)} unique 2026 scorecard links.")
     return urls
 
 def split_scorecard_sections(lines):
-    """
-    Parse Cricbuzz scorecard text robustly.
-
-    Cricbuzz can split role and dismissal markup into separate text nodes:
-      Philip Salt | (c & wk) | not out | 47 | 37 | 2 | 1 | 127.03
-    or:
-      Matthew Short | c | Chris Jordan | b | Daniel Worrall |
-      20 | 15 | 4 | 0 | 133.33
-
-    Find the five numeric fields first instead of assuming a fixed number of
-    text nodes between player name and statistics.
-    """
     batting, bowling = [], []
     i = 0
 
-    def is_int_token(x):
+    def is_int(x):
         return bool(re.fullmatch(r"\d+", str(x).strip()))
 
-    def is_float_token(x):
+    def is_num(x):
         return bool(re.fullmatch(r"\d+(?:\.\d+)?", str(x).strip().replace("−", "-")))
 
-    def find_five_numbers(start_idx, max_lookahead=16):
-        upper = min(len(lines) - 4, start_idx + max_lookahead)
-        for k in range(start_idx, upper):
+    def find_five(start, lookahead=16):
+        upper = min(len(lines) - 4, start + lookahead)
+        for k in range(start, upper):
             vals = lines[k:k+5]
             if (
                 len(vals) == 5
-                and is_int_token(vals[0])
-                and is_int_token(vals[1])
-                and is_int_token(vals[2])
-                and is_int_token(vals[3])
-                and is_float_token(vals[4])
+                and all(is_int(v) for v in vals[:4])
+                and is_num(vals[4])
             ):
                 return k
         return None
 
     while i < len(lines):
-        # Batting section: name + arbitrary role/dismissal nodes + 5 numbers.
         if (
             lines[i] == "Batter"
             and i + 5 < len(lines)
@@ -332,60 +460,36 @@ def split_scorecard_sections(lines):
         ):
             i += 6
             rows = []
-
-            while i < len(lines) and lines[i] not in {
-                "Extras", "Bowler", "Total", "Did not Bat", "INFO"
-            }:
+            while i < len(lines) and lines[i] not in {"Extras", "Bowler", "Total", "Did not Bat", "INFO"}:
                 raw_name = lines[i].strip()
-                if not raw_name:
+                numeric_at = find_five(i + 1)
+                if not raw_name or numeric_at is None:
                     i += 1
                     continue
-
-                numeric_at = find_five_numbers(i + 1)
-                if numeric_at is None:
-                    i += 1
-                    continue
-
                 name = clean_role(raw_name)
-                middle = lines[i+1:numeric_at]
-                dismissal = clean_role(" ".join(middle))
-
-                if not name:
-                    i += 1
-                    continue
-
+                dismissal = clean_role(" ".join(lines[i+1:numeric_at]))
                 try:
-                    runs = int(lines[numeric_at])
-                    balls = int(lines[numeric_at + 1])
-                    fours = int(lines[numeric_at + 2])
-                    sixes = int(lines[numeric_at + 3])
-                    float(lines[numeric_at + 4].replace("−", "-"))
+                    runs, balls, fours, sixes = map(int, lines[numeric_at:numeric_at+4])
+                    float(lines[numeric_at+4].replace("−", "-"))
                 except Exception:
                     i += 1
                     continue
-
                 d = dismissal.lower()
-                dismissed = not (
-                    "not out" in d
-                    or "retired hurt" in d
-                    or "absent hurt" in d
-                )
-
                 rows.append({
                     "name": name,
                     "runs": runs,
                     "balls": balls,
                     "fours": fours,
                     "sixes": sixes,
-                    "dismissed": dismissed,
+                    "dismissed": not (
+                        "not out" in d or "retired hurt" in d or "absent hurt" in d
+                    ),
                 })
                 i = numeric_at + 5
-
             if rows:
                 batting.append(rows)
             continue
 
-        # Bowling section: name + 5 numbers (B, D, R, W, RPB).
         if (
             lines[i] == "Bowler"
             and i + 5 < len(lines)
@@ -393,42 +497,25 @@ def split_scorecard_sections(lines):
         ):
             i += 6
             rows = []
-
-            while i < len(lines) and lines[i] not in {
-                "Fall of Wickets", "Batter", "INFO", "Partnerships"
-            }:
+            while i < len(lines) and lines[i] not in {"Fall of Wickets", "Batter", "INFO", "Partnerships"}:
                 raw_name = lines[i].strip()
-                if not raw_name:
+                numeric_at = find_five(i + 1, 10)
+                if not raw_name or numeric_at is None:
                     i += 1
                     continue
-
-                numeric_at = find_five_numbers(i + 1, max_lookahead=8)
-                if numeric_at is None:
-                    i += 1
-                    continue
-
                 name = clean_role(raw_name)
-                if not name:
-                    i += 1
-                    continue
-
                 try:
                     balls = int(lines[numeric_at])
-                    runs = int(lines[numeric_at + 2])
-                    wkts = int(lines[numeric_at + 3])
-                    float(lines[numeric_at + 4].replace("−", "-"))
+                    runs = int(lines[numeric_at+2])
+                    wickets = int(lines[numeric_at+3])
+                    float(lines[numeric_at+4].replace("−", "-"))
                 except Exception:
                     i += 1
                     continue
-
                 rows.append({
-                    "name": name,
-                    "balls": balls,
-                    "runs": runs,
-                    "wickets": wkts,
+                    "name": name, "balls": balls, "runs": runs, "wickets": wickets
                 })
                 i = numeric_at + 5
-
             if rows:
                 bowling.append(rows)
             continue
@@ -437,98 +524,332 @@ def split_scorecard_sections(lines):
 
     return batting, bowling
 
-def aggregate_cricbuzz_2026(stats):
+def parse_url_codes(url):
+    m = re.search(r"/\d+/([a-z]+)-vs-([a-z]+)-", url, flags=re.I)
+    if not m:
+        return None, None
+    a, b = m.group(1).upper(), m.group(2).upper()
+    return (a if a in TEAM_NAMES else None), (b if b in TEAM_NAMES else None)
+
+def parse_match_meta(url, lines):
+    a, b = parse_url_codes(url)
+
+    result_line = next(
+        (
+            x for x in lines[:180]
+            if " won by " in x.lower()
+            or x.lower() in {"match tied", "no result", "match abandoned"}
+        ),
+        "",
+    )
+    winner = None
+    for code, name in TEAM_NAMES.items():
+        if result_line.lower().startswith(name.lower()):
+            winner = code
+            break
+
+    result_type = None
+    low = result_line.lower()
+    if "tied" in low:
+        result_type = "tie"
+    elif "no result" in low or "abandoned" in low:
+        result_type = "no result"
+
+    venue = None
+    for i, x in enumerate(lines):
+        if x == "Venue" and i + 1 < len(lines):
+            venue = lines[i+1]
+            break
+    if not venue:
+        # Top-of-page token can appear as "Venue:".
+        for i, x in enumerate(lines[:160]):
+            if x.rstrip(":") == "Venue" and i + 1 < len(lines):
+                venue = lines[i+1]
+                break
+
+    date = None
+    for i, x in enumerate(lines):
+        if x == "Date" and i + 1 < len(lines):
+            raw = lines[i+1]
+            try:
+                date = datetime.strptime(raw + " 2026", "%A, %B %d %Y").date().isoformat()
+            except Exception:
+                pass
+            break
+
+    scores = {}
+    for i, x in enumerate(lines[:-1]):
+        if x in TEAM_NAMES and re.match(r"^\d+(?:-\d+)?\s*\(\d+", lines[i+1]):
+            m = re.match(r"^(\d+)(?:-(\d+))?\s*\((\d+)", lines[i+1])
+            if m:
+                scores[x] = {
+                    "runs": int(m.group(1)),
+                    "wickets": int(m.group(2) or 10),
+                    "balls": int(m.group(3)),
+                }
+
+    return {
+        "a": a, "b": b, "winner": winner, "result_type": result_type,
+        "result": result_line, "venue": venue, "date": date, "scores": scores,
+    }
+
+def parse_squads(lines):
+    squads = {}
+    for i, token in enumerate(lines):
+        if not token.endswith(" squad"):
+            continue
+        code = team_code(token[:-6].strip())
+        if not code:
+            continue
+        try:
+            p = lines.index("Players", i, min(len(lines), i + 10))
+        except ValueError:
+            continue
+        names = []
+        j = p + 1
+        while j < len(lines) and lines[j] not in {"Bench", "Support Staff"}:
+            n = clean_role(lines[j].rstrip(","))
+            if n and not re.fullmatch(r"\d+|\d+:\d+.*", n):
+                names.append(n)
+            j += 1
+        squads[code] = names
+    return squads
+
+def aggregate_cricbuzz_2026(base):
+    stats = base["stats"]
+    display_names = base["display_names"]
+    team_h2h = dict(base["historical_h2h"])
     urls = get_2026_scorecard_urls()
+
     parsed = 0
-    appearances = defaultdict(set)
+    team_form = defaultdict(list)
+    player_recent = defaultdict(list)
+    current_team = {}
+    current_match_summaries = []
 
     for url in urls:
         html = get(url).text
         soup = BeautifulSoup(html, "html.parser")
-        lines = [re.sub(r"\s+", " ", s).strip() for s in soup.stripped_strings]
+        lines = [re.sub(r"\s+", " ", x).strip() for x in soup.stripped_strings]
         batting, bowling = split_scorecard_sections(lines)
         if not batting:
-            # Future match/pre-match scorecard; simply skip.
             continue
         parsed += 1
 
-        # Count matches from players who appear in the scorecard batting/bowling sections.
-        # This is robust enough for played matches; DNB-only players are added below from squad "Players" blocks where possible.
+        meta = parse_match_meta(url, lines)
+        squads = parse_squads(lines)
+
         match_seen = set()
+        for code, names in squads.items():
+            for name in names:
+                key, _ = ensure(stats, display_names, name, prefer_name=True)
+                if key:
+                    current_team[key] = code
+                    match_seen.add(key)
+
+        match_player = defaultdict(dict)
+
         for inn in batting:
             for r in inn:
-                key, rec = ensure(stats, r["name"], prefer_name=True)
-                if key: match_seen.add(key)
-            add_batting_innings(stats, inn, prefer_name=True)
+                key, _ = ensure(stats, display_names, r["name"], prefer_name=True)
+                if key:
+                    match_seen.add(key)
+                    match_player[key]["batting"] = dict(r)
+            add_batting_innings(stats, display_names, inn, prefer_name=True)
+
         for inn in bowling:
             for r in inn:
-                key, rec = ensure(stats, r["name"], prefer_name=True)
-                if key: match_seen.add(key)
-            add_bowling_innings(stats, inn, prefer_name=True)
-
-        # Recover XI players listed under each squad's "Players" heading.
-        # Between "Players" and "Bench" every comma-separated name is a player.
-        for idx, val in enumerate(lines):
-            if val == "Players":
-                j = idx + 1
-                while j < len(lines) and lines[j] not in {"Bench","Support Staff"}:
-                    name = clean_role(lines[j].rstrip(","))
-                    # Avoid headings accidentally entering the XI.
-                    if name and not re.fullmatch(r"\d+|\d+:\d+.*", name):
-                        key, rec = ensure(stats, name, prefer_name=True)
-                        if key: match_seen.add(key)
-                    j += 1
+                key, _ = ensure(stats, display_names, r["name"], prefer_name=True)
+                if key:
+                    match_seen.add(key)
+                    match_player[key]["bowling"] = dict(r)
+            add_bowling_innings(stats, display_names, inn, prefer_name=True)
 
         for key in match_seen:
             stats[key]["matches"] += 1
 
-    if parsed < 20:
-        raise RuntimeError(f"Only {parsed} 2026 scorecards contained match data; expected at least 20.")
-    return parsed, len(urls)
+        if meta["a"] and meta["b"] and (meta["winner"] or meta["result_type"]):
+            add_h2h(
+                team_h2h, meta["a"], meta["b"],
+                winner=meta["winner"], result=meta["result_type"],
+            )
 
-def build_tables(stats):
-    batting = []
-    bowling = []
+            for code, opp in ((meta["a"], meta["b"]), (meta["b"], meta["a"])):
+                if meta["winner"] == code:
+                    outcome = "W"
+                elif meta["winner"] == opp:
+                    outcome = "L"
+                elif meta["result_type"] == "tie":
+                    outcome = "T"
+                else:
+                    outcome = "NR"
+                team_form[code].append({
+                    "date": meta["date"], "opponent": opp, "result": outcome,
+                    "venue": meta["venue"], "match_result": meta["result"],
+                })
+
+        for key, rec in match_player.items():
+            code = current_team.get(key)
+            opp = None
+            if code == meta["a"]:
+                opp = meta["b"]
+            elif code == meta["b"]:
+                opp = meta["a"]
+            player_recent[key].append({
+                "date": meta["date"],
+                "team": code,
+                "opponent": opp,
+                "batting": rec.get("batting"),
+                "bowling": rec.get("bowling"),
+                "result": meta["result"],
+            })
+
+        current_match_summaries.append(meta)
+
+    if parsed < 20:
+        raise RuntimeError(f"Only {parsed} 2026 scorecards contained match data.")
+
+    for rows in team_form.values():
+        rows.sort(key=lambda x: x.get("date") or "")
+    for rows in player_recent.values():
+        rows.sort(key=lambda x: x.get("date") or "")
+
+    return {
+        "parsed": parsed,
+        "discovered": len(urls),
+        "team_h2h": team_h2h,
+        "team_form": team_form,
+        "player_recent": player_recent,
+        "current_team": current_team,
+        "match_summaries": current_match_summaries,
+    }
+
+def build_career_tables(stats, display_names, current_team):
+    batting, bowling = [], []
     for key, r in stats.items():
+        display = display_names.get(key) or r["display"] or key
+        team = current_team.get(key)
+
         if r["runs"] or r["innings"]:
-            avg = (r["runs"] / r["dismissals"]) if r["dismissals"] else None
-            sr = (100 * r["runs"] / r["balls"]) if r["balls"] else None
+            avg = r["runs"] / r["dismissals"] if r["dismissals"] else None
+            sr = 100 * r["runs"] / r["balls"] if r["balls"] else None
             batting.append({
-                "player": r["display"],
-                "matches": r["matches"],
-                "innings": r["innings"],
+                "key": key, "player": display, "team": team,
+                "matches": r["matches"], "innings": r["innings"],
                 "runs": r["runs"],
                 "high_score": f'{r["high_score"]}{"*" if r["not_out_high"] else ""}',
                 "average": round(avg, 2) if avg is not None else None,
                 "strike_rate": round(sr, 2) if sr is not None else None,
-                "fours": r["fours"],
-                "sixes": r["sixes"],
+                "fours": r["fours"], "sixes": r["sixes"],
             })
+
         if r["wickets"] or r["bowling_innings"]:
-            avg = (r["runs_conceded"] / r["wickets"]) if r["wickets"] else None
-            rpb = (r["runs_conceded"] / r["balls_bowled"]) if r["balls_bowled"] else None
+            avg = r["runs_conceded"] / r["wickets"] if r["wickets"] else None
+            econ6 = 6 * r["runs_conceded"] / r["balls_bowled"] if r["balls_bowled"] else None
+            sr = r["balls_bowled"] / r["wickets"] if r["wickets"] else None
             best = f'{r["best_wickets"]}/{r["best_runs"]}' if r["best_runs"] < 9999 else None
             bowling.append({
-                "player": r["display"],
-                "matches": r["matches"],
-                "innings": r["bowling_innings"],
-                "wickets": r["wickets"],
-                "best": best,
+                "key": key, "player": display, "team": team,
+                "matches": r["matches"], "innings": r["bowling_innings"],
+                "wickets": r["wickets"], "best": best,
                 "average": round(avg, 2) if avg is not None else None,
-                "runs_per_ball": round(rpb, 3) if rpb is not None else None,
+                "economy": round(econ6, 2) if econ6 is not None else None,
+                "strike_rate": round(sr, 2) if sr is not None else None,
                 "balls": r["balls_bowled"],
             })
+
     batting.sort(key=lambda x: (x["runs"], x["strike_rate"] or 0), reverse=True)
     bowling.sort(key=lambda x: (x["wickets"], -(x["average"] or 9999)), reverse=True)
-    for i, x in enumerate(batting, 1): x["rank"] = i
-    for i, x in enumerate(bowling, 1): x["rank"] = i
+    for i, x in enumerate(batting, 1):
+        x["rank"] = i
+    for i, x in enumerate(bowling, 1):
+        x["rank"] = i
     return batting, bowling
+
+def build_analytics(base, current, batting, bowling):
+    display_names = base["display_names"]
+
+    h2h = list(current["team_h2h"].values())
+    h2h.sort(key=lambda x: (x["a"], x["b"]))
+
+    matchups = []
+    for (bk, wk), r in base["player_matchups"].items():
+        if r["balls"] < 3:
+            continue
+        matchups.append({
+            "batter_key": bk,
+            "bowler_key": wk,
+            "batter": display_names.get(bk, bk),
+            "bowler": display_names.get(wk, wk),
+            **r,
+            "strike_rate": round(100 * r["runs"] / r["balls"], 1) if r["balls"] else None,
+            "dot_pct": round(100 * r["dots"] / r["balls"], 1) if r["balls"] else None,
+        })
+    matchups.sort(key=lambda x: (x["balls"], x["dismissals"]), reverse=True)
+
+    phases = {}
+    for code, arr in base["phase"].items():
+        phases[code] = []
+        for label, r in zip(PHASE_LABELS, arr):
+            balls = int(r.get("balls", 0))
+            phases[code].append({
+                "phase": label,
+                "balls": balls,
+                "runs": int(r.get("runs", 0)),
+                "wickets": int(r.get("wickets", 0)),
+                "runs_per_ball": round(r.get("runs", 0) / balls, 3) if balls else None,
+                "wickets_per_100": round(100 * r.get("wickets", 0) / balls, 2) if balls else None,
+            })
+
+    venues = []
+    for venue, s in base["venue_summary"].items():
+        teams = []
+        for code, r in base["venue_team"][venue].items():
+            teams.append({
+                "code": code,
+                "matches": r["matches"],
+                "wins": r["wins"],
+                "win_pct": round(100 * r["wins"] / r["matches"], 1) if r["matches"] else None,
+            })
+        teams.sort(key=lambda x: (-x["matches"], x["code"]))
+        venues.append({
+            "venue": venue,
+            "matches": s["matches"],
+            "avg_first_innings": round(s["first_innings_runs"] / s["matches"], 1) if s["matches"] else None,
+            "chase_wins": s["chase_wins"],
+            "defend_wins": s["defend_wins"],
+            "teams": teams,
+        })
+    venues.sort(key=lambda x: x["matches"], reverse=True)
+
+    players = {}
+    bat_by_key = {x["key"]: x for x in batting}
+    bowl_by_key = {x["key"]: x for x in bowling}
+    all_keys = set(bat_by_key) | set(bowl_by_key) | set(current["player_recent"])
+    for key in all_keys:
+        players[key] = {
+            "key": key,
+            "player": display_names.get(key) or bat_by_key.get(key, {}).get("player") or bowl_by_key.get(key, {}).get("player") or key,
+            "team": current["current_team"].get(key),
+            "batting": bat_by_key.get(key),
+            "bowling": bowl_by_key.get(key),
+            "recent": current["player_recent"].get(key, [])[-8:],
+        }
+
+    return {
+        "team_h2h": h2h,
+        "team_form": {k: v[-8:] for k, v in current["team_form"].items()},
+        "player_matchups": matchups,
+        "phases": phases,
+        "venues": venues,
+        "players": list(players.values()),
+        "ball_by_ball_cutoff": base["latest_bbb_date"],
+    }
 
 def cricbuzz_standings():
     html = get(CRICBUZZ_TABLE).text
     soup = BeautifulSoup(html, "html.parser")
     tokens = [re.sub(r"\s+", " ", x).strip() for x in soup.stripped_strings]
-
     found = {}
     code_re = re.compile(r"^(TRE|MIL|WEF|MSG|SUL|SOU|LDN|BRM)(?:\s*\([A-Z]+\))?$")
 
@@ -540,89 +861,36 @@ def cricbuzz_standings():
             return int(tok)
         return None
 
-    # Every actual table row ends immediately before an "Opposition" heading.
-    # Search backwards from that heading to find:
-    # rank, team code/status, P, W, L, NR, Pts, NRR
     for opp_i, tok in enumerate(tokens):
         if tok != "Opposition":
             continue
-
-        window_start = max(0, opp_i - 18)
-        window = tokens[window_start:opp_i]
-
-        code_pos = None
-        code = None
-        # Use the LAST team-code-like token before "Opposition".
-        # That avoids unrelated navigation text earlier in the window.
+        window = tokens[max(0, opp_i - 18):opp_i]
+        code_pos, code = None, None
         for j in range(len(window) - 1, -1, -1):
             m = code_re.fullmatch(window[j])
             if m:
-                code_pos = j
-                code = m.group(1)
+                code_pos, code = j, m.group(1)
                 break
-
-        if code is None:
-            # Some Cricbuzz markup may split "LDN(E)" into "LDN" and "(E)".
-            for j in range(len(window) - 1, -1, -1):
-                if window[j] in TEAM_NAMES:
-                    code_pos = j
-                    code = window[j]
-                    break
-
         if code is None:
             continue
-
-        nums = []
-        for x in window[code_pos + 1:]:
-            v = numeric(x)
-            if v is not None:
-                nums.append(v)
-
-        # Ranking row must contribute exactly/sufficiently:
-        # P W L NR Pts NRR. If markup added another token, use the final six
-        # numeric values immediately preceding "Opposition".
+        nums = [numeric(x) for x in window[code_pos+1:]]
+        nums = [x for x in nums if x is not None]
         if len(nums) < 6:
             continue
-        p_, w_, l_, nr_, pts_, nrr_ = nums[-6:]
-
-        if not all(isinstance(v, int) for v in [p_, w_, l_, nr_, pts_]):
+        p, w, l, nr, pts, nrr = nums[-6:]
+        if not all(isinstance(v, int) for v in [p, w, l, nr, pts]):
             continue
-        if not isinstance(nrr_, (int, float)):
+        if not (0 <= p <= 8 and 0 <= w <= p and 0 <= l <= p and 0 <= nr <= p):
             continue
-
-        p_, w_, l_, nr_, pts_, nrr_ = (
-            int(p_), int(w_), int(l_), int(nr_), int(pts_), float(nrr_)
-        )
-
-        if not (0 <= p_ <= 8 and 0 <= w_ <= p_ and 0 <= l_ <= p_ and 0 <= nr_ <= p_):
-            continue
-        if w_ + l_ + nr_ > p_ or not (0 <= pts_ <= 32) or not (-10 <= nrr_ <= 10):
-            continue
-
         found[code] = {
-            "team": TEAM_NAMES[code],
-            "code": code,
-            "p": p_,
-            "w": w_,
-            "l": l_,
-            "nr": nr_,
-            "pts": pts_,
-            "nrr": nrr_,
+            "team": TEAM_NAMES[code], "code": code,
+            "p": int(p), "w": int(w), "l": int(l), "nr": int(nr),
+            "pts": int(pts), "nrr": float(nrr),
         }
 
     if len(found) != 8:
         missing = sorted(set(TEAM_NAMES) - set(found))
-        diagnostics = {}
-        for code in missing:
-            diagnostics[code] = [
-                tokens[max(0, j-3):j+10]
-                for j, t in enumerate(tokens)
-                if t == code or t.startswith(code + "(")
-            ][-3:]
-        raise RuntimeError(
-            f"Could not parse all 8 standings rows; found {len(found)}: "
-            f"{sorted(found)}; missing: {missing}; nearby tokens: {diagnostics}"
-        )
+        raise RuntimeError(f"Standings parser found {len(found)}/8; missing {missing}")
 
     rows = list(found.values())
     rows.sort(key=lambda x: (x["pts"], x["nrr"]), reverse=True)
@@ -633,133 +901,147 @@ def cricbuzz_standings():
 def main():
     refreshed = now()
     failures = []
-    source_status = {}
+    sources = {}
 
     try:
-        stats, historical_matches = aggregate_cricsheet_through_2025()
-        source_status["historical"] = {
-            "name": "Cricsheet – The Hundred JSON ball-by-ball (repository copy)",
+        base = aggregate_cricsheet()
+        sources["cricsheet"] = {
+            "name": "Cricsheet – The Hundred ball-by-ball",
             "url": CRICSHEET_HUNDRED,
             "status": "ok",
             "last_success": refreshed,
-            "detail": f"{historical_matches} men's matches through 2025 aggregated"
+            "detail": (
+                f"{base['historical_count']} men's matches through 2025 for career baseline; "
+                f"ball-by-ball analytics available through {base['latest_bbb_date']}"
+            ),
         }
     except Exception as e:
-        failures.append(f"historical: {e}")
-        stats = {}
-        historical_matches = 0
-        source_status["historical"] = {
-            "name": "Cricsheet – The Hundred JSON ball-by-ball (repository copy)",
+        failures.append(f"cricsheet: {e}")
+        base = None
+        sources["cricsheet"] = {
+            "name": "Cricsheet – The Hundred ball-by-ball",
             "url": CRICSHEET_HUNDRED,
             "status": "error",
-            "last_success": None,
-            "error": str(e)
+            "error": str(e),
         }
 
-    salt_historical_runs = stats.get("psalt", {}).get("runs", 0) if stats else 0
-
-    if stats:
+    current = None
+    if base:
+        salt_hist = base["stats"].get("psalt", {}).get("runs", 0)
+        adil_hist = base["stats"].get("arashid", {}).get("wickets", 0)
         try:
-            parsed_2026, discovered_2026 = aggregate_cricbuzz_2026(stats)
-            source_status["current_matches"] = {
-                "name": "Cricbuzz – 2026 scorecards discovered via points-table results",
+            current = aggregate_cricbuzz_2026(base)
+            sources["current_matches"] = {
+                "name": "Cricbuzz – 2026 scorecards",
                 "url": CRICBUZZ_TABLE,
                 "status": "ok",
                 "last_success": refreshed,
                 "detail": (
-                    f"{parsed_2026} scorecards with data / {discovered_2026} discovered; "
-                    f"Phil Salt 2026 runs added: "
-                    f"{stats.get('psalt', {}).get('runs', 0) - salt_historical_runs}"
-                )
+                    f"{current['parsed']} scorecards parsed / {current['discovered']} discovered; "
+                    f"Salt 2026 runs added={base['stats'].get('psalt', {}).get('runs', 0)-salt_hist}; "
+                    f"Adil Rashid 2026 wickets added={base['stats'].get('arashid', {}).get('wickets', 0)-adil_hist}"
+                ),
             }
         except Exception as e:
             failures.append(f"current_matches: {e}")
-            source_status["current_matches"] = {
-                "name": "Cricbuzz – 2026 scorecards discovered via points-table results",
+            sources["current_matches"] = {
+                "name": "Cricbuzz – 2026 scorecards",
                 "url": CRICBUZZ_TABLE,
                 "status": "error",
-                "last_success": None,
-                "error": str(e)
+                "error": str(e),
             }
 
     try:
         standings = cricbuzz_standings()
-        source_status["standings"] = {
+        sources["standings"] = {
             "name": "Cricbuzz – 2026 points table",
             "url": CRICBUZZ_TABLE,
             "status": "ok",
-            "last_success": refreshed
+            "last_success": refreshed,
         }
     except Exception as e:
         standings = []
         failures.append(f"standings: {e}")
-        source_status["standings"] = {
+        sources["standings"] = {
             "name": "Cricbuzz – 2026 points table",
             "url": CRICBUZZ_TABLE,
             "status": "error",
-            "last_success": None,
-            "error": str(e)
+            "error": str(e),
         }
 
-    batting, bowling = build_tables(stats) if stats else ([], [])
+    batting, bowling = ([], [])
+    analytics = {}
+    if base and current:
+        batting, bowling = build_career_tables(
+            base["stats"], base["display_names"], current["current_team"]
+        )
+        analytics = build_analytics(base, current, batting, bowling)
 
-    # Critical validation: after the completed matches currently available,
-    # Phil Salt's all-time total must not regress below the user-verified ESPN
-    # figure of 1,294. This catches name-merging or incomplete-history errors.
-    salt = None
-    if stats:
-        salt = next((x for x in batting if x["player"].lower() == "phil salt"), None)
-        if not salt:
-            # Historical Cricsheet may retain an abbreviated display name.
-            salt = next((x for x in batting if person_key(x["player"]) == "psalt"), None)
+        salt = next((x for x in batting if x["key"] == "psalt"), None)
+        adil = next((x for x in bowling if x["key"] == "arashid"), None)
+
+        # Regression guards against silently reverting to the frozen 2025 tables.
         if not salt or salt["runs"] < 1294:
-            salt_like = [
-                (x["player"], x["runs"])
-                for x in batting
-                if "salt" in x["player"].lower()
-            ]
             failures.append(
-                f"validation: Phil Salt total is {salt['runs'] if salt else 'missing'}, "
-                f"expected at least 1294; historical={salt_historical_runs}; "
-                f"2026_added={stats.get('psalt', {}).get('runs', 0) - salt_historical_runs}; "
-                f"salt-like rows: {salt_like}"
+                f"validation: Phil Salt={salt['runs'] if salt else 'missing'}, expected >=1294"
+            )
+        if not adil or adil["wickets"] < 53:
+            failures.append(
+                f"validation: Adil Rashid={adil['wickets'] if adil else 'missing'}, expected >=53"
+            )
+        if len(analytics.get("team_h2h", [])) < 28:
+            failures.append(
+                f"validation: H2H matrix has {len(analytics.get('team_h2h', []))}/28 pairings"
+            )
+        if len(analytics.get("player_matchups", [])) < 100:
+            failures.append(
+                f"validation: only {len(analytics.get('player_matchups', []))} player matchups"
             )
 
     data = {
-        "schema_version": 3,
+        "schema_version": 4,
         "generated_at_utc": refreshed,
         "status": {
             "overall": "ok" if not failures else "error",
             "stale": bool(failures),
-            "message": "All critical sources refreshed." if not failures else "Critical data refresh failed. See source health.",
-            "failures": failures
+            "message": "Analyst dataset refreshed and validated." if not failures else "Refresh failed validation.",
+            "failures": failures,
         },
-        "sources": source_status,
+        "sources": sources,
+        "teams": [{"code": c, "name": n} for c, n in TEAM_NAMES.items()],
         "career_batting": batting,
         "career_bowling": bowling,
         "standings": standings,
+        "analytics": analytics,
         "method": {
-            "career": "Cricsheet men's Hundred ball-by-ball through 2025 + all available 2026 Cricbuzz scorecards, recomputed from scratch each refresh.",
-            "current": "2026 scorecards are re-read on every run, so completed and in-progress scorecard data can flow into cumulative totals as Cricbuzz publishes it.",
-            "validation": "Phil Salt all-time runs may not regress below the independently verified 1,294 benchmark."
-        }
+            "career": "End-2025 Cricsheet career baseline + every available 2026 Cricbuzz scorecard, recomputed on refresh.",
+            "team_h2h": "Completed 2021–2025 Cricsheet results + completed/currently published 2026 Cricbuzz results.",
+            "player_h2h": "Delivery-level batter-v-bowler analysis from the local Cricsheet archive; freshness is shown separately.",
+            "economy": "Bowling economy is shown as runs per 6 balls to align with conventional ESPN-style career economy.",
+            "prediction": "Analyst Edge is a directional index, not a calibrated win probability.",
+        },
     }
 
-    # Only publish a new JSON when critical validation succeeds.
-    # This prevents a broken scrape from replacing the last good dataset.
     if failures:
-        debug = ROOT / "data" / "last_failed_refresh.json"
-        debug.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        (ROOT / "data" / "last_failed_refresh.json").write_text(
+            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
         print(json.dumps(data["status"], indent=2))
         return 1
 
     DATA_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    salt = next(x for x in batting if x["key"] == "psalt")
+    adil = next(x for x in bowling if x["key"] == "arashid")
     print(json.dumps({
-        "status":"ok",
-        "batters":len(batting),
-        "bowlers":len(bowling),
-        "salt_runs": salt["runs"] if salt else None,
-        "standings_rows":len(standings)
+        "status": "ok",
+        "salt_runs": salt["runs"],
+        "adil_rashid_wickets": adil["wickets"],
+        "batters": len(batting),
+        "bowlers": len(bowling),
+        "team_h2h_pairs": len(analytics["team_h2h"]),
+        "player_matchups": len(analytics["player_matchups"]),
+        "standings_rows": len(standings),
+        "ball_by_ball_cutoff": analytics["ball_by_ball_cutoff"],
     }, indent=2))
     return 0
 
