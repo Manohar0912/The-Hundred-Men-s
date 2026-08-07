@@ -524,6 +524,72 @@ def split_scorecard_sections(lines):
 
     return batting, bowling
 
+def extract_bowling_rows_anywhere(lines):
+    """
+    Recover bowling figures from the full visible scorecard text without
+    depending on Cricbuzz's table DOM.
+
+    Bowling rows satisfy:
+        name | B | D | R | W | RPB
+    and, critically:
+        R / B ~= RPB
+    """
+    rows = []
+    seen = set()
+    blocked = {
+        "Batter", "Bowler", "Extras", "Total", "Did not Bat",
+        "Fall of Wickets", "Score", "Ball", "Partnerships",
+        "INFO", "Match", "Series", "Date", "Time", "Toss", "Venue",
+        "Umpires", "Referee", "Players", "Bench", "Support Staff",
+        "B", "D", "R", "W", "RPB", "SR", "4s", "6s",
+    }
+
+    def as_int(x):
+        x = str(x).strip()
+        return int(x) if re.fullmatch(r"\d+", x) else None
+
+    def as_float(x):
+        x = str(x).strip().replace("−", "-")
+        return float(x) if re.fullmatch(r"\d+(?:\.\d+)?", x) else None
+
+    for i, raw in enumerate(lines):
+        raw = str(raw).strip()
+        if not raw or raw in blocked:
+            continue
+
+        name = clean_role(raw)
+        if not name or len(name) > 60 or not re.search(r"[A-Za-z]", name):
+            continue
+
+        for k in range(i + 1, min(i + 5, len(lines) - 4)):
+            b = as_int(lines[k])
+            d = as_int(lines[k + 1])
+            r = as_int(lines[k + 2])
+            w = as_int(lines[k + 3])
+            rpb = as_float(lines[k + 4])
+
+            if None in (b, d, r, w, rpb):
+                continue
+            if not (1 <= b <= 20 and 0 <= d <= b and 0 <= r <= 80 and 0 <= w <= 10):
+                continue
+            if not (0 <= rpb <= 6):
+                continue
+            if abs((r / b) - rpb) > 0.08:
+                continue
+
+            key = person_key(name)
+            if not key:
+                continue
+            sig = (key, b, r, w)
+            if sig in seen:
+                break
+
+            seen.add(sig)
+            rows.append({"name": name, "balls": b, "runs": r, "wickets": w})
+            break
+
+    return rows
+
 def parse_url_codes(url):
     m = re.search(r"/\d+/([a-z]+)-vs-([a-z]+)-", url, flags=re.I)
     if not m:
@@ -632,6 +698,12 @@ def aggregate_cricbuzz_2026(base):
         soup = BeautifulSoup(html, "html.parser")
         lines = [re.sub(r"\s+", " ", x).strip() for x in soup.stripped_strings]
         batting, bowling = split_scorecard_sections(lines)
+        fallback_bowling = extract_bowling_rows_anywhere(lines)
+
+        structured_count = sum(len(x) for x in bowling)
+        if fallback_bowling and len(fallback_bowling) >= structured_count:
+            bowling = [fallback_bowling]
+
         if not batting:
             continue
         parsed += 1
