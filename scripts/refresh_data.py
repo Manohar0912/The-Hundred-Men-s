@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_FILE = ROOT / "data" / "current.json"
 
 CRICSHEET_HUNDRED = "https://cricsheet.org/downloads/hnd_json.zip"
+CRICSHEET_LOCAL = ROOT / "data" / "hnd_json.zip"
 CRICBUZZ_MATCHES = "https://www.cricbuzz.com/cricket-series/11493/the-hundred-mens-competition-2026/matches"
 CRICBUZZ_TABLE = "https://www.cricbuzz.com/cricket-series/11493/the-hundred-mens-competition-2026/points-table"
 CRICBUZZ_BASE = "https://www.cricbuzz.com"
@@ -142,12 +143,23 @@ def add_bowling_innings(stats, rows, prefer_name=False):
             rec["best_wickets"], rec["best_runs"] = w, r
 
 def aggregate_cricsheet_through_2025():
-    r = get(CRICSHEET_HUNDRED, timeout=60)
-    if len(r.content) < 100_000:
-        raise RuntimeError("Cricsheet download is unexpectedly small; possible challenge/block page.")
+    # Historical data is kept in the repository because Cricsheet's download
+    # endpoint can challenge GitHub-hosted runners. Historical seasons through
+    # 2025 do not need to be downloaded every ten minutes.
+    if not CRICSHEET_LOCAL.exists():
+        raise RuntimeError(
+            "Missing data/hnd_json.zip. Download The Hundred JSON ZIP from "
+            "Cricsheet in a normal browser and upload it to data/hnd_json.zip."
+        )
+    size = CRICSHEET_LOCAL.stat().st_size
+    if size < 500_000:
+        raise RuntimeError(
+            f"data/hnd_json.zip is only {size} bytes; expected the Cricsheet "
+            "Hundred JSON archive (currently about 1.3 MB)."
+        )
     stats = {}
     match_count = 0
-    z = zipfile.ZipFile(BytesIO(r.content))
+    z = zipfile.ZipFile(CRICSHEET_LOCAL)
     for name in z.namelist():
         if not name.endswith(".json"):
             continue
@@ -398,7 +410,7 @@ def cricbuzz_standings():
     # Parse complete table rows in one pass. This avoids accidentally matching
     # opponent codes elsewhere on the page.
     pattern = re.compile(
-        r"(?<!\d)([1-8])\s+(TRE|MIL|WEF|MSG|SUL|SOU|LDN|BRM)\s+"
+        r"(?<!\d)([1-8])\s+(TRE|MIL|WEF|MSG|SUL|SOU|LDN|BRM)(?:\([A-Z]\))?\s+"
         r"(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+([+\-]?\d+\.\d+)"
     )
     found = {}
@@ -422,7 +434,7 @@ def main():
     try:
         stats, historical_matches = aggregate_cricsheet_through_2025()
         source_status["historical"] = {
-            "name": "Cricsheet – The Hundred JSON ball-by-ball",
+            "name": "Cricsheet – The Hundred JSON ball-by-ball (repository copy)",
             "url": CRICSHEET_HUNDRED,
             "status": "ok",
             "last_success": refreshed,
@@ -433,7 +445,7 @@ def main():
         stats = {}
         historical_matches = 0
         source_status["historical"] = {
-            "name": "Cricsheet – The Hundred JSON ball-by-ball",
+            "name": "Cricsheet – The Hundred JSON ball-by-ball (repository copy)",
             "url": CRICSHEET_HUNDRED,
             "status": "error",
             "last_success": None,
