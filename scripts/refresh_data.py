@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_FILE = ROOT / "data" / "current.json"
 
 CRICSHEET_HUNDRED = "https://cricsheet.org/downloads/hnd_json.zip"
-CRICSHEET_LOCAL = ROOT / "data" / "hnd_json.zip"
+CRICSHEET_LOCAL_CANDIDATES = [ROOT / "data" / "hnd_json.zip", ROOT / "hnd_json.zip"]
 CRICBUZZ_MATCHES = "https://www.cricbuzz.com/cricket-series/11493/the-hundred-mens-competition-2026/matches"
 CRICBUZZ_TABLE = "https://www.cricbuzz.com/cricket-series/11493/the-hundred-mens-competition-2026/points-table"
 CRICBUZZ_BASE = "https://www.cricbuzz.com"
@@ -144,22 +144,24 @@ def add_bowling_innings(stats, rows, prefer_name=False):
 
 def aggregate_cricsheet_through_2025():
     # Historical data is kept in the repository because Cricsheet's download
-    # endpoint can challenge GitHub-hosted runners. Historical seasons through
-    # 2025 do not need to be downloaded every ten minutes.
-    if not CRICSHEET_LOCAL.exists():
+    # endpoint can challenge GitHub-hosted runners. Accept the archive either
+    # under data/ (preferred) or at repository root (backward-compatible).
+    archive = next((x for x in CRICSHEET_LOCAL_CANDIDATES if x.exists()), None)
+    if archive is None:
+        checked = ", ".join(str(x.relative_to(ROOT)) for x in CRICSHEET_LOCAL_CANDIDATES)
         raise RuntimeError(
-            "Missing data/hnd_json.zip. Download The Hundred JSON ZIP from "
-            "Cricsheet in a normal browser and upload it to data/hnd_json.zip."
+            f"Missing Cricsheet archive. Checked: {checked}. "
+            "Upload hnd_json.zip without extracting it."
         )
-    size = CRICSHEET_LOCAL.stat().st_size
+    size = archive.stat().st_size
     if size < 500_000:
         raise RuntimeError(
-            f"data/hnd_json.zip is only {size} bytes; expected the Cricsheet "
-            "Hundred JSON archive (currently about 1.3 MB)."
+            f"{archive.relative_to(ROOT)} is only {size} bytes; expected the "
+            "Cricsheet Hundred JSON archive (roughly 1 MB+)."
         )
     stats = {}
     match_count = 0
-    z = zipfile.ZipFile(CRICSHEET_LOCAL)
+    z = zipfile.ZipFile(archive)
     for name in z.namelist():
         if not name.endswith(".json"):
             continue
@@ -407,23 +409,46 @@ def build_tables(stats):
 def cricbuzz_standings():
     html = get(CRICBUZZ_TABLE).text
     text = " ".join(BeautifulSoup(html, "html.parser").stripped_strings)
-    # Parse complete table rows in one pass. This avoids accidentally matching
-    # opponent codes elsewhere on the page.
-    pattern = re.compile(
-        r"(?<!\d)([1-8])\s+(TRE|MIL|WEF|MSG|SUL|SOU|LDN|BRM)(?:\([A-Z]\))?\s+"
-        r"(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+([+\-]?\d+\.\d+)"
-    )
+
+    # Parse each known team independently. Opponent entries elsewhere on the
+    # page are followed by dates/results, not six consecutive table numbers,
+    # so requiring P W L NR Pts NRR cleanly identifies the ranking row.
     found = {}
-    for rank, code, p, w, l, nr, pts, nrr in pattern.findall(text):
-        found[code] = {
-            "rank": int(rank), "team": TEAM_NAMES[code], "code": code,
-            "p": int(p), "w": int(w), "l": int(l), "nr": int(nr),
-            "pts": int(pts), "nrr": float(nrr)
-        }
+    for code, team_name in TEAM_NAMES.items():
+        pattern = re.compile(
+            rf"(?<![A-Z]){re.escape(code)}(?:\([A-Z]\))?\s+"
+            rf"(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+([+\-]?\d+\.\d+)"
+        )
+        candidates = pattern.findall(text)
+        valid = []
+        for p, w, l, nr, pts, nrr in candidates:
+            p, w, l, nr, pts = map(int, (p, w, l, nr, pts))
+            nrr = float(nrr)
+            # Basic competition sanity checks to discard any accidental match.
+            if 0 <= p <= 8 and 0 <= w <= p and 0 <= l <= p and 0 <= nr <= p:
+                if w + l + nr <= p and 0 <= pts <= 32:
+                    valid.append((p, w, l, nr, pts, nrr))
+        if valid:
+            # There should be one standings row. If duplicates appear, prefer
+            # the row with most games played, then most points.
+            p, w, l, nr, pts, nrr = sorted(valid, key=lambda x:(x[0], x[4]), reverse=True)[0]
+            found[code] = {
+                "team": team_name, "code": code,
+                "p": p, "w": w, "l": l, "nr": nr,
+                "pts": pts, "nrr": nrr
+            }
+
     if len(found) != 8:
-        raise RuntimeError(f"Could not parse all 8 standings rows; found {len(found)}: {sorted(found)}")
+        missing = sorted(set(TEAM_NAMES) - set(found))
+        raise RuntimeError(
+            f"Could not parse all 8 standings rows; found {len(found)}: "
+            f"{sorted(found)}; missing: {missing}"
+        )
+
     rows = list(found.values())
-    rows.sort(key=lambda x: x["rank"])
+    rows.sort(key=lambda x: (x["pts"], x["nrr"]), reverse=True)
+    for rank, row in enumerate(rows, 1):
+        row["rank"] = rank
     return rows
 
 def main():
@@ -496,12 +521,17 @@ def main():
     # Critical validation: after the completed matches currently available,
     # Phil Salt's all-time total must not regress below the user-verified ESPN
     # figure of 1,294. This catches name-merging or incomplete-history errors.
-    salt = next((x for x in batting if x["player"].lower() == "phil salt"), None)
-    if not salt:
-        # Historical Cricsheet may retain an abbreviated display name.
-        salt = next((x for x in batting if person_key(x["player"]) == "psalt"), None)
-    if not salt or salt["runs"] < 1294:
-        failures.append(f"validation: Phil Salt total is {salt['runs'] if salt else 'missing'}, expected at least 1294")
+    salt = None
+    if stats:
+        salt = next((x for x in batting if x["player"].lower() == "phil salt"), None)
+        if not salt:
+            # Historical Cricsheet may retain an abbreviated display name.
+            salt = next((x for x in batting if person_key(x["player"]) == "psalt"), None)
+        if not salt or salt["runs"] < 1294:
+            failures.append(
+                f"validation: Phil Salt total is {salt['runs'] if salt else 'missing'}, "
+                "expected at least 1294"
+            )
 
     data = {
         "schema_version": 3,
@@ -536,7 +566,7 @@ def main():
         "status":"ok",
         "batters":len(batting),
         "bowlers":len(bowling),
-        "salt_runs":salt["runs"],
+        "salt_runs": salt["runs"] if salt else None,
         "standings_rows":len(standings)
     }, indent=2))
     return 0
