@@ -1,0 +1,140 @@
+{
+  "schema_version": 2,
+  "generated_at_utc": "2026-08-07T19:29:00Z",
+  "status": {
+    "overall": "bootstrap_partial",
+    "message": "Bootstrap snapshot. Deploy the included refresh workflow for near-live ESPN career tables.",
+    "stale": true
+  },
+  "sources": {
+    "career_batting": {
+      "name": "ESPNcricinfo \u2013 The Hundred Men's Competition, most runs in career",
+      "url": "https://www.espncricinfo.com/records/trophy/batting-most-runs-career/the-hundred-men-s-competition-826",
+      "last_success": null,
+      "status": "bootstrap_partial"
+    },
+    "career_bowling": {
+      "name": "ESPNcricinfo \u2013 The Hundred Men's Competition, most wickets in career",
+      "url": "https://www.espncricinfo.com/records/trophy/bowling-most-wickets-career/the-hundred-men-s-competition-826",
+      "last_success": null,
+      "status": "awaiting_refresh"
+    },
+    "standings": {
+      "name": "Cricbuzz \u2013 The Hundred Men's Competition 2026 points table",
+      "url": "https://www.cricbuzz.com/cricket-series/11493/the-hundred-mens-competition-2026/points-table",
+      "last_success": "2026-08-07T19:29:00Z",
+      "status": "ok"
+    }
+  },
+  "career_batting": [
+    {
+      "rank": 1,
+      "player": "Phil Salt",
+      "runs": 1294,
+      "source_note": "Current figure supplied from the linked ESPNcricinfo record page on 7 Aug 2026."
+    }
+  ],
+  "career_bowling": [],
+  "standings": [
+    {
+      "rank": 1,
+      "team": "Trent Rockets",
+      "code": "TRE",
+      "p": 6,
+      "w": 5,
+      "l": 1,
+      "nr": 0,
+      "pts": 20,
+      "nrr": 0.893
+    },
+    {
+      "rank": 2,
+      "team": "MI London",
+      "code": "MIL",
+      "p": 6,
+      "w": 4,
+      "l": 2,
+      "nr": 0,
+      "pts": 16,
+      "nrr": 0.448
+    },
+    {
+      "rank": 3,
+      "team": "Welsh Fire",
+      "code": "WEF",
+      "p": 6,
+      "w": 4,
+      "l": 2,
+      "nr": 0,
+      "pts": 16,
+      "nrr": -0.537
+    },
+    {
+      "rank": 4,
+      "team": "Manchester Super Giants",
+      "code": "MSG",
+      "p": 6,
+      "w": 3,
+      "l": 3,
+      "nr": 0,
+      "pts": 12,
+      "nrr": 0.495
+    },
+    {
+      "rank": 5,
+      "team": "SunRisers Leeds",
+      "code": "SUL",
+      "p": 5,
+      "w": 3,
+      "l": 2,
+      "nr": 0,
+      "pts": 12,
+      "nrr": 0.348
+    },
+    {
+      "rank": 6,
+      "team": "Southern Brave",
+      "code": "SOU",
+      "p": 6,
+      "w": 2,
+      "l": 4,
+      "nr": 0,
+      "pts": 8,
+      "nrr": 0.022
+    },
+    {
+      "rank": 7,
+      "team": "London Spirit",
+      "code": "LDN",
+      "p": 6,
+      "w": 1,
+      "l": 5,
+      "nr": 0,
+      "pts": 4,
+      "nrr": -0.458
+    },
+    {
+      "rank": 8,
+      "team": "Birmingham Phoenix",
+      "code": "BRM",
+      "p": 5,
+      "w": 1,
+      "l": 4,
+      "nr": 0,
+      "pts": 4,
+      "nrr": -1.289
+    }
+  ],
+  "live_context": {
+    "label": "Match 24 in progress at bootstrap time",
+    "match": "SunRisers Leeds vs Birmingham Phoenix",
+    "score": "SUL 169/7 (100 balls); BRM chase in progress",
+    "note": "This seed snapshot is not the live feed. The deployed updater refreshes published data."
+  },
+  "h2h_scope": "Historical H2H should be treated as dated evidence unless the refresh pipeline has ingested the latest completed matches.",
+  "franchise_lineage": {
+    "Oval Invincibles": "MI London",
+    "Manchester Originals": "Manchester Super Giants",
+    "Northern Superchargers": "SunRisers Leeds"
+  }
+}
