@@ -47,7 +47,7 @@
 <footer class="foot">Team/career data refreshes from published 2026 scorecards. Delivery-level player H2H, phase and detailed venue analytics are only as fresh as the uploaded Cricsheet archive; that cutoff is always shown. “Analyst Edge” is decision support, not betting advice or a calibrated probability.</footer>
 </div>
 <script>
-let D=null;let selectedPlayerKey=null;const $=s=>document.querySelector(s);const byCode={};const fmt=n=>n==null?'—':Number(n).toLocaleString(undefined,{maximumFractionDigits:2});
+let D=null;let latestRefreshFailure=null;let selectedPlayerKey=null;const $=s=>document.querySelector(s);const byCode={};const fmt=n=>n==null?'—':Number(n).toLocaleString(undefined,{maximumFractionDigits:2});
 document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===b));document.querySelectorAll('.panel').forEach(x=>x.classList.toggle('on',x.id===b.dataset.tab))}));
 function ago(iso){if(!iso)return'never';const s=(Date.now()-new Date(iso))/1000;if(s<90)return Math.round(s)+' sec ago';if(s<5400)return Math.round(s/60)+' min ago';return Math.round(s/3600)+' hr ago'}
 function h2h(a,b){const x=[a,b].sort();const r=(D.analytics.team_h2h||[]).find(v=>v.a===x[0]&&v.b===x[1]);if(!r)return{games:0,aWins:0,bWins:0,ties:0,no_results:0};return{games:r.games,aWins:a===r.a?r.a_wins:r.b_wins,bWins:b===r.b?r.b_wins:r.a_wins,ties:r.ties,no_results:r.no_results}}
@@ -240,7 +240,12 @@ function renderPVH(){const b=$('#batterSelect').value,w=$('#bowlerSelect').value
 function renderMatrix(){const codes=D.teams.map(x=>x.code);let h='<thead><tr><th>Row team</th>'+codes.map(c=>`<th>${c}</th>`).join('')+'</tr></thead><tbody>';for(const a of codes){h+=`<tr><th>${a}</th>`;for(const b of codes){if(a===b){h+='<td><div class="cell">—</div></td>';continue}const x=h2h(a,b),d=x.aWins+x.bWins,s=d?x.aWins/d:.5,cl=s>.55?'strong':s<.45?'weak':'even';h+=`<td><button class="cell ${cl}" data-a="${a}" data-b="${b}">${(s*100).toFixed(0)}%<br><small>n=${x.games}</small></button></td>`}h+='</tr>'}h+='</tbody>';$('#matrixTable').innerHTML=h;$('#matrixTable').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{$('#teamA').value=b.dataset.a;$('#teamB').value=b.dataset.b;renderMatch();document.querySelector('[data-tab="matchup"]').click()}))}
 function renderRecords(){const bq=$('#batSearch').value.toLowerCase(),wq=$('#bowlSearch').value.toLowerCase();$('#batRows').innerHTML=D.career_batting.filter(x=>!bq||x.player.toLowerCase().includes(bq)).slice(0,100).map(x=>`<tr><td>${x.rank}</td><td><b>${x.player}</b></td><td>${x.runs}</td><td>${x.matches}</td><td>${fmt(x.average)}</td><td>${fmt(x.strike_rate)}</td><td>${x.sixes}</td></tr>`).join('');$('#bowlRows').innerHTML=D.career_bowling.filter(x=>!wq||x.player.toLowerCase().includes(wq)).slice(0,100).map(x=>`<tr><td>${x.rank}</td><td><b>${x.player}</b></td><td>${x.wickets}</td><td>${x.matches}</td><td>${fmt(x.average)}</td><td>${fmt(x.economy)}</td><td>${fmt(x.strike_rate)}</td></tr>`).join('')}
 function render(){
-  const ok=D.status?.overall==='ok';
+  const dataOk=D.status?.overall==='ok';
+  const failedAfterCurrent=
+    latestRefreshFailure?.generated_at_utc &&
+    D.generated_at_utc &&
+    new Date(latestRefreshFailure.generated_at_utc) > new Date(D.generated_at_utc);
+  const ok=dataOk && !failedAfterCurrent;
   D.teams.forEach(t=>byCode[t.code]=t.name);
 
   // Capture current UI state BEFORE rebuilding select options.
@@ -255,10 +260,22 @@ function render(){
 
   $('#updated').textContent=new Date(D.generated_at_utc).toLocaleString()+' · '+ago(D.generated_at_utc);
   $('#healthDot').className='dot '+(ok?'ok':'bad');
-  $('#healthText').textContent=ok?'Validated':'Stale / failed';
-  $('#banner').innerHTML=ok
-    ?`<strong>Validated analyst snapshot.</strong> Career/team data current to the latest successful scorecard refresh; delivery-level H2H current through <strong>${D.analytics.ball_by_ball_cutoff||'unknown'}</strong>.`
-    :`<strong>Warning:</strong> latest refresh failed; last-good dataset remains published.`;
+  $('#healthText').textContent=ok?'Validated':'Using last verified data';
+
+  if(failedAfterCurrent){
+    const reason=(latestRefreshFailure.status?.failures||[]).join(' · ');
+    $('#banner').innerHTML=
+      `<strong>Latest data refresh failed validation.</strong> `+
+      `The newest dashboard UI is live, but analytics are using the last verified dataset from `+
+      `<strong>${new Date(D.generated_at_utc).toLocaleString()}</strong>. `+
+      `${reason?`Reason: ${reason}`:''}`;
+  }else if(ok){
+    $('#banner').innerHTML=
+      `<strong>Validated analyst snapshot.</strong> Career/team data current to the latest successful scorecard refresh; delivery-level H2H current through <strong>${D.analytics.ball_by_ball_cutoff||'unknown'}</strong>.`;
+  }else{
+    $('#banner').innerHTML=
+      `<strong>Warning:</strong> using the last verified dataset.`;
+  }
 
   const opts=D.teams.map(t=>`<option value="${t.code}">${t.name}</option>`).join('');
   $('#teamA').innerHTML=opts;
@@ -329,5 +346,24 @@ $('#playerSearch').addEventListener('input',()=>{
     showPlayerProfile(p,{syncSearch:false});
   }
 });$('#batterSelect').addEventListener('change',renderPVH);$('#bowlerSelect').addEventListener('change',renderPVH);$('#batSearch').addEventListener('input',renderRecords);$('#bowlSearch').addEventListener('input',renderRecords);
-async function load(){try{const r=await fetch('data/current.json?t='+Date.now(),{cache:'no-store'});if(!r.ok)throw Error(r.status);D=await r.json();render()}catch(e){$('#banner').innerHTML='<strong>Could not load analyst data.</strong> Check the latest GitHub Action.'}}load();setInterval(load,60000);
+async function load(){
+  try{
+    const current=await fetch('data/current.json?t='+Date.now(),{cache:'no-store'});
+    if(!current.ok)throw Error(current.status);
+    D=await current.json();
+
+    latestRefreshFailure=null;
+    try{
+      const failed=await fetch('data/last_failed_refresh.json?t='+Date.now(),{cache:'no-store'});
+      if(failed.ok)latestRefreshFailure=await failed.json();
+    }catch(_){}
+
+    render();
+  }catch(e){
+    $('#banner').innerHTML=
+      '<strong>Could not load analyst data.</strong> Check the latest GitHub Action.';
+  }
+}
+load();
+setInterval(load,60000);
 </script></body></html>
