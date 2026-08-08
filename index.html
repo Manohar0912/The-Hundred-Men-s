@@ -17,11 +17,25 @@
 .matrixWrap{overflow:auto}.matrix{min-width:760px;border-collapse:separate;border-spacing:4px}.matrix th,.matrix td{padding:0;border:0;background:transparent;position:static}.cell{width:100%;min-height:48px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);display:grid;place-items:center;font-size:10px}.cell.strong{background:color-mix(in srgb,var(--green) 20%,var(--panel2))}.cell.weak{background:color-mix(in srgb,var(--pink) 18%,var(--panel2))}.cell.even{background:color-mix(in srgb,var(--amber) 13%,var(--panel2))}
 .playerHero{display:grid;grid-template-columns:1.15fr .85fr;gap:9px}.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}.stat{padding:9px;border-radius:9px;background:var(--panel2)}.stat small{display:block;font-size:9px;color:var(--muted)}.stat b{font-size:15px}.empty{padding:20px;border:1px dashed var(--line);border-radius:11px;text-align:center;color:var(--muted);font-size:11px}.sourceList{display:grid;gap:7px}.source{padding:10px;background:var(--panel2);border:1px solid var(--line);border-radius:10px}.source b{font-size:11px}.source p{margin:4px 0 0;color:var(--muted);font-size:9px;line-height:1.45;overflow-wrap:anywhere}.foot{margin-top:14px;padding-top:11px;border-top:1px solid var(--line);font-size:9px;color:var(--muted);line-height:1.5}
 @media(max-width:900px){.app{padding:13px}.hero{align-items:flex-start;flex-direction:column}.stamp{width:100%}.toolbar{grid-template-columns:1fr}.kpis{grid-template-columns:1fr 1fr}.grid,.grid.equal,.playerHero{grid-template-columns:1fr}.cards{grid-template-columns:1fr}.stats{grid-template-columns:1fr 1fr}.comp{grid-template-columns:95px 1fr 40px}}
+
+.predHero{display:grid;grid-template-columns:1.1fr .9fr;gap:9px;margin-bottom:9px}
+.predScore{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}.predScore b{font-size:42px;line-height:.9;letter-spacing:-.055em}.predScore span{color:var(--muted);font-size:10px}
+.confidence{display:inline-flex;gap:6px;align-items:center;padding:5px 8px;border:1px solid var(--line);border-radius:999px;font-size:9px;color:var(--muted)}
+.brief{font-size:13px;line-height:1.65;color:var(--text)}.brief strong{color:var(--cyan)}
+.predGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-bottom:9px}
+.predCard{padding:13px;border:1px solid var(--line);background:var(--panel);border-radius:15px;min-width:0}.predCard h3{font-size:12px;margin:0 0 8px}.predCard p{font-size:10px;color:var(--muted);line-height:1.5;margin:0}
+.winList{display:grid;gap:7px}.winItem{display:grid;grid-template-columns:26px 1fr;gap:8px;align-items:start;background:var(--panel2);border-radius:10px;padding:9px}.winNum{width:24px;height:24px;border-radius:7px;display:grid;place-items:center;font-weight:900;font-size:10px;background:color-mix(in srgb,var(--cyan) 20%,var(--panel2))}.winItem b{display:block;font-size:10px;margin-bottom:2px}.winItem span{font-size:9px;color:var(--muted);line-height:1.4}
+.scenario{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.scenario button{text-align:left;padding:10px;min-height:72px}.scenario button.on{border-color:var(--cyan);box-shadow:inset 0 0 0 1px var(--cyan)}.scenario small{display:block;color:var(--muted);font-size:8px;margin-top:3px}
+.swingGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.swingTeam{display:grid;gap:6px}.swing{display:grid;grid-template-columns:30px 1fr auto;gap:8px;align-items:center;background:var(--panel2);border-radius:10px;padding:9px}.swingRank{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;background:var(--panel);font-weight:900;font-size:10px}.swing b{display:block;font-size:10px}.swing small{display:block;color:var(--muted);font-size:8px;margin-top:2px}.swingScore{font-size:11px;font-weight:900;color:var(--cyan)}
+.pressure{display:grid;grid-template-columns:1fr auto;gap:9px;align-items:center;padding:9px;background:var(--panel2);border-radius:10px;margin-bottom:6px}.pressure b{font-size:10px}.pressure small{display:block;color:var(--muted);font-size:8px;margin-top:2px}.pressureTag{font-size:9px;font-weight:900;border:1px solid var(--line);border-radius:999px;padding:5px 7px}
+.modelNote{font-size:9px;line-height:1.5;color:var(--muted);border-left:3px solid var(--amber);padding-left:9px}
+@media(max-width:900px){.predHero,.predGrid,.swingGrid{grid-template-columns:1fr}.scenario{grid-template-columns:1fr}}
+
 </style></head>
 <body><div class="app">
 <header class="hero"><div><div class="ey">The Hundred Men · Analyst Workspace</div><h1>Pre-Match Intelligence</h1><div class="sub">Current career records, team H2H, recent form, venue context, phase profiles and batter-v-bowler matchups in one shareable workspace. Current totals and delivery-level analytics show separate freshness cutoffs.</div></div><div class="stamp"><small>Latest verified refresh</small><b id="updated">Loading…</b><div class="health"><span id="healthDot" class="dot"></span><span id="healthText">Checking</span></div></div></header>
 <div class="banner" id="banner">Loading analyst dataset…</div>
-<nav class="tabs"><button class="tab on" data-tab="matchup">Matchup Lab</button><button class="tab" data-tab="players">Player Lab</button><button class="tab" data-tab="matrix">H2H Matrix</button><button class="tab" data-tab="records">Career Records</button><button class="tab" data-tab="table">2026 Table</button><button class="tab" data-tab="health">Data Health</button></nav>
+<nav class="tabs"><button class="tab on" data-tab="matchup">Matchup Lab</button><button class="tab" data-tab="prediction">Prediction Center</button><button class="tab" data-tab="players">Player Lab</button><button class="tab" data-tab="matrix">H2H Matrix</button><button class="tab" data-tab="records">Career Records</button><button class="tab" data-tab="table">2026 Table</button><button class="tab" data-tab="health">Data Health</button></nav>
 
 <section id="matchup" class="panel on">
 <div class="toolbar"><div class="field"><label>Team A</label><select id="teamA"></select></div><div class="field"><label>Team B</label><select id="teamB"></select></div><div class="field"><label>Venue context</label><select id="venue"><option value="">All venues</option></select></div></div>
@@ -30,6 +44,63 @@
 <div class="card"><div class="head"><div><h2>Recent form</h2><div class="desc">Latest published 2026 results.</div></div></div><div id="forms"></div></div></div>
 <div class="grid equal"><div class="card"><div class="head"><div><h2>25-ball phase profile</h2><div class="desc" id="phaseCutoff"></div></div></div><div id="phaseCompare"></div></div><div class="card"><div class="head"><div><h2>Venue signal</h2><div class="desc">Historical/ball-by-ball venue context.</div></div></div><div id="venueSignal"></div></div></div>
 <div class="card"><div class="head"><div><h2>Key batter-v-bowler matchups</h2><div class="desc">Only pairings involving the selected teams' current players; always read the balls sample before the strike rate.</div></div><span class="badge" id="bbbBadge"></span></div><div id="keyMatchups"></div></div>
+</section>
+
+
+<section id="prediction" class="panel">
+<div class="toolbar">
+  <div class="field"><label>Team A</label><select id="predTeamA"></select></div>
+  <div class="field"><label>Team B</label><select id="predTeamB"></select></div>
+  <div class="field"><label>Venue</label><select id="predVenue"><option value="">Auto venue context</option></select></div>
+</div>
+
+<div class="kpis" id="predKpis"></div>
+
+<div class="predHero">
+  <div class="card">
+    <div class="head"><div><h2>Pre-match analyst brief</h2><div class="desc">Auto-generated from the same visible inputs used by the model.</div></div><span class="badge">Model v1 · heuristic</span></div>
+    <div id="predBrief" class="brief"></div>
+  </div>
+  <div class="card">
+    <div class="head"><div><h2>Prediction index</h2><div class="desc">Directional evidence score, not a calibrated win probability.</div></div><span id="predConfidence" class="confidence"></span></div>
+    <div class="predScore"><b id="predScore"></b><span id="predLeanText"></span></div>
+    <div class="meter"><div class="needle" id="predNeedle"></div></div>
+    <div class="edgeLabels"><span id="predEdgeA"></span><span>50 · neutral</span><span id="predEdgeB"></span></div>
+    <div class="components" id="predComponents"></div>
+  </div>
+</div>
+
+<div class="grid equal">
+  <div class="card"><div class="head"><div><h2 id="winTitleA">How Team A wins</h2><div class="desc">Highest-value conditions from available evidence.</div></div></div><div id="winA" class="winList"></div></div>
+  <div class="card"><div class="head"><div><h2 id="winTitleB">How Team B wins</h2><div class="desc">Highest-value conditions from available evidence.</div></div></div><div id="winB" class="winList"></div></div>
+</div>
+
+<div class="grid equal">
+  <div class="card">
+    <div class="head"><div><h2>Toss & innings simulator</h2><div class="desc">Uses historical venue chase/defend balance to adjust the base index.</div></div></div>
+    <div class="scenario" id="scenarioButtons">
+      <button data-scenario="pretoss" class="on"><b>Pre-toss</b><small>No innings-order adjustment</small></button>
+      <button data-scenario="a_bats"><b id="scenarioATitle">Team A bats first</b><small>Team B chases</small></button>
+      <button data-scenario="b_bats"><b id="scenarioBTitle">Team B bats first</b><small>Team A chases</small></button>
+    </div>
+    <div style="height:10px"></div>
+    <div id="scenarioOutput"></div>
+  </div>
+  <div class="card">
+    <div class="head"><div><h2>Prediction context</h2><div class="desc">Score environment and evidence strength.</div></div></div>
+    <div id="predictionContext"></div>
+  </div>
+</div>
+
+<div class="grid equal">
+  <div class="card"><div class="head"><div><h2>Matchup pressure board</h2><div class="desc">Largest sampled current-roster batter-v-bowler interactions.</div></div><span id="pressureCutoff" class="badge"></span></div><div id="pressureBoard"></div></div>
+  <div class="card"><div class="head"><div><h2>Swing players</h2><div class="desc">Career production + 2026 recent contribution + sampled matchup involvement.</div></div></div><div id="swingPlayers" class="swingGrid"></div></div>
+</div>
+
+<div class="card">
+  <div class="head"><div><h2>Model transparency</h2><div class="desc">What drives the Prediction Index.</div></div></div>
+  <div class="modelNote">Current weights: H2H 22%, 2026 points strength 18%, NRR 10%, recent form 15%, venue 10%, 25-ball phase profile 12%, player matchups 13%. The toss simulator is a separate venue-based adjustment. Confidence measures evidence coverage/sample quality—not certainty. This version is not yet backtested or probability-calibrated.</div>
+</div>
 </section>
 
 <section id="players" class="panel">
@@ -44,7 +115,7 @@
 <section id="table" class="panel"><div class="card"><div class="head"><div><h2>2026 standings</h2><div class="desc">Latest successfully parsed competition table.</div></div></div><div class="table"><table><thead><tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>L</th><th>NR</th><th>Pts</th><th>NRR</th></tr></thead><tbody id="standings"></tbody></table></div></div></section>
 
 <section id="health" class="panel"><div class="grid equal"><div class="card"><div class="head"><div><h2>Source health</h2><div class="desc">A failed validation does not overwrite the last verified dataset.</div></div></div><div class="sourceList" id="sources"></div></div><div class="card"><div class="head"><div><h2>Coverage</h2><div class="desc">Different analyses legitimately have different freshness.</div></div></div><div class="sourceList" id="coverage"></div></div></div></section>
-<footer class="foot">Team/career data refreshes from published 2026 scorecards. Delivery-level player H2H, phase and detailed venue analytics are only as fresh as the uploaded Cricsheet archive; that cutoff is always shown. “Analyst Edge” is decision support, not betting advice or a calibrated probability.</footer>
+<footer class="foot">Team/career data refreshes from published 2026 scorecards. Delivery-level player H2H, phase and detailed venue analytics are only as fresh as the uploaded Cricsheet archive; that cutoff is always shown. Prediction Center and Analyst Edge are decision-support indices, not betting advice or calibrated win probabilities. Model v1 is transparent but not yet backtested.</footer>
 </div>
 <script>
 let D=null;let latestRefreshFailure=null;let selectedPlayerKey=null;const $=s=>document.querySelector(s);const byCode={};const fmt=n=>n==null?'—':Number(n).toLocaleString(undefined,{maximumFractionDigits:2});
@@ -167,7 +238,390 @@ function renderKeyMatchups(a,b){
   }
 }
 
-function renderPlayer(a,b){const roster=new Map((D.analytics.players||[]).filter(p=>p.team===a||p.team===b).map(p=>[p.key,p.team]));const rows=(D.analytics.player_matchups||[]).filter(x=>{const bt=roster.get(x.batter_key),wt=roster.get(x.bowler_key);return (bt===a&&wt===b)||(bt===b&&wt===a)}).sort((x,y)=>y.balls-x.balls).slice(0,12);$('#bbbBadge').textContent=`BBB cutoff ${D.analytics.ball_by_ball_cutoff||'—'}`;$('#keyMatchups').innerHTML=rows.length?`<div class="table"><table><thead><tr><th>Batter</th><th>Bowler</th><th>Balls</th><th>Runs</th><th>Outs</th><th>SR</th><th>Dot%</th></tr></thead><tbody>${rows.map(x=>`<tr><td><b>${x.batter}</b></td><td>${x.bowler}</td><td>${x.balls}</td><td>${x.runs}</td><td>${x.dismissals}</td><td>${fmt(x.strike_rate)}</td><td>${fmt(x.dot_pct)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No sampled player matchup between the selected current rosters in the loaded ball-by-ball archive.</div>'}
+
+let predictionScenario='pretoss';
+
+function clamp(v,min=0,max=1){return Math.max(min,Math.min(max,v))}
+function logistic(x){return 1/(1+Math.exp(-x))}
+
+function selectedPredictionVenue(a,b){
+  const selected=$('#predVenue')?.value||'';
+  if(selected){
+    return D.analytics.venues?.find(v=>v.venue===selected)||null;
+  }
+  return bestAutoVenue(a,b);
+}
+
+function venueComponent(a,b,venue){
+  if(!venue)return .5;
+  const ta=venue.teams?.find(t=>t.code===a);
+  const tb=venue.teams?.find(t=>t.code===b);
+  if(!ta&&!tb)return .5;
+
+  // Shrink small venue samples toward neutral.
+  const shrunk=t=>{
+    if(!t||!t.matches)return .5;
+    const raw=(t.win_pct??50)/100;
+    const reliability=t.matches/(t.matches+4);
+    return .5+(raw-.5)*reliability;
+  };
+  const av=shrunk(ta),bv=shrunk(tb);
+  return av+bv?av/(av+bv):.5;
+}
+
+function phaseExpectation(code){
+  const rows=D.analytics.phases?.[code]||[];
+  if(!rows.length)return null;
+  let total=0,covered=0;
+  rows.forEach(r=>{
+    if(r?.runs_per_ball!=null&&r?.balls){
+      total+=r.runs_per_ball*25;
+      covered++;
+    }
+  });
+  return covered?total*(4/covered):null;
+}
+
+function phaseComponent(a,b){
+  const pa=phaseExpectation(a),pb=phaseExpectation(b);
+  if(pa==null||pb==null)return .5;
+  return logistic((pa-pb)/10);
+}
+
+function directRosterMatchups(a,b){
+  const ra=rosterKeys(a),rb=rosterKeys(b);
+  return (D.analytics.player_matchups||[]).filter(x=>
+    (ra.has(x.batter_key)&&rb.has(x.bowler_key))||
+    (rb.has(x.batter_key)&&ra.has(x.bowler_key))
+  );
+}
+
+function batterMatchupStrength(x){
+  if(!x?.balls)return .5;
+  const sr=x.strike_rate??(100*x.runs/x.balls);
+  const srScore=logistic((sr-130)/28);
+  const dismissalRate=x.dismissals/x.balls;
+  const survival=1-clamp(dismissalRate/0.08);
+  return clamp(.65*srScore+.35*survival);
+}
+
+function matchupComponent(a,b){
+  const ra=rosterKeys(a),rb=rosterKeys(b);
+  const rows=directRosterMatchups(a,b);
+  if(!rows.length)return {value:.5,balls:0,count:0};
+
+  let total=0,weight=0,balls=0;
+  rows.forEach(x=>{
+    const sampleWeight=Math.min(1,x.balls/24);
+    let v=batterMatchupStrength(x);
+    if(rb.has(x.batter_key)&&ra.has(x.bowler_key))v=1-v;
+    total+=v*sampleWeight;
+    weight+=sampleWeight;
+    balls+=x.balls;
+  });
+  return {value:weight?total/weight:.5,balls,count:rows.length};
+}
+
+function predictionEvidence(a,b){
+  const h=h2h(a,b);
+  const venue=selectedPredictionVenue(a,b);
+  const m=matchupComponent(a,b);
+  const formN=Math.min(10,(D.analytics.team_form?.[a]?.length||0)+(D.analytics.team_form?.[b]?.length||0));
+  const h2hQ=Math.min(1,h.games/8);
+  const venueQ=venue?Math.min(1,venue.matches/18):0;
+  const matchupQ=Math.min(1,m.balls/120);
+  const formQ=formN/10;
+
+  let freshness=.65;
+  try{
+    const cutoff=new Date(D.analytics.ball_by_ball_cutoff);
+    const generated=new Date(D.generated_at_utc);
+    const days=Math.max(0,(generated-cutoff)/(86400000));
+    freshness=days<=3?1:days<=7?.85:days<=14?.65:.45;
+  }catch(_){}
+
+  const score=100*(.28*h2hQ+.20*venueQ+.22*matchupQ+.18*formQ+.12*freshness);
+  const label=score>=72?'High':score>=48?'Moderate':'Low';
+  return {score,label,h2hQ,venueQ,matchupQ,formQ,freshness,matchup:m,venue};
+}
+
+function predictionModel(a,b){
+  const old=edge(a,b);
+  const venue=selectedPredictionVenue(a,b);
+  const venueV=venueComponent(a,b,venue);
+  const phaseV=phaseComponent(a,b);
+  const matchup=matchupComponent(a,b);
+
+  const components=[
+    {key:'h2h',label:'H2H',weight:.22,value:old.hs},
+    {key:'points',label:'2026 points',weight:.18,value:old.ps},
+    {key:'nrr',label:'NRR',weight:.10,value:old.n},
+    {key:'form',label:'Recent form',weight:.15,value:old.rs},
+    {key:'venue',label:'Venue',weight:.10,value:venueV},
+    {key:'phase',label:'Phase profile',weight:.12,value:phaseV},
+    {key:'matchups',label:'Player matchups',weight:.13,value:matchup.value}
+  ];
+
+  const base=100*components.reduce((s,c)=>s+c.weight*c.value,0);
+  return {base,components,venue,matchup,evidence:predictionEvidence(a,b)};
+}
+
+function chaseRate(venue){
+  if(!venue)return .5;
+  const decided=(venue.chase_wins||0)+(venue.defend_wins||0);
+  return decided?venue.chase_wins/decided:.5;
+}
+
+function scenarioAdjustedScore(model,scenario){
+  let adjustment=0;
+  const cr=chaseRate(model.venue);
+  const chaseBias=(cr-.5)*20; // maximum practical nudge roughly +/-10
+  if(scenario==='a_bats')adjustment=-chaseBias;
+  if(scenario==='b_bats')adjustment=chaseBias;
+  return clamp(model.base+adjustment,3,97);
+}
+
+function contextPar(a,b,venue){
+  const phaseA=phaseExpectation(a),phaseB=phaseExpectation(b);
+  const teamContext=(phaseA!=null&&phaseB!=null)?(phaseA+phaseB)/2:(phaseA??phaseB);
+  const venueAvg=venue?.avg_first_innings??null;
+  if(venueAvg!=null&&teamContext!=null)return .65*venueAvg+.35*teamContext;
+  return venueAvg??teamContext;
+}
+
+function conditionCandidates(team,opp,model){
+  const items=[];
+  const h=h2h(team,opp),dec=h.aWins+h.bWins,share=dec?h.aWins/dec:.5;
+  if(dec){
+    items.push({
+      score:Math.abs(share-.5)+.03,
+      title:share>=.5?'Use the historical matchup':'Reverse the historical matchup',
+      text:share>=.5
+        ?`${byCode[team]} have won ${h.aWins} of ${dec} decided H2Hs.`
+        :`${byCode[opp]} lead decided H2Hs ${h.bWins}-${h.aWins}; ${byCode[team]} need to break that pattern.`
+    });
+  }
+
+  const tp=D.analytics.phases?.[team]||[],op=D.analytics.phases?.[opp]||[];
+  let best=null;
+  for(let i=0;i<Math.min(tp.length,op.length);i++){
+    if(tp[i]?.runs_per_ball==null||op[i]?.runs_per_ball==null)continue;
+    const diff=tp[i].runs_per_ball-op[i].runs_per_ball;
+    if(!best||diff>best.diff)best={i,diff,t:tp[i],o:op[i]};
+  }
+  if(best){
+    items.push({
+      score:Math.abs(best.diff)/2+.04,
+      title:best.diff>=0?`Win balls ${best.t.phase}`:`Survive balls ${best.t.phase}`,
+      text:best.diff>=0
+        ?`${team} score ${best.t.runs_per_ball.toFixed(2)} RPB in this phase vs ${opp} ${best.o.runs_per_ball.toFixed(2)}.`
+        :`${opp} hold a ${Math.abs(best.diff).toFixed(2)} RPB phase edge here; limiting damage is a key condition.`
+    });
+  }
+
+  const teamForm=recentRate(team),oppForm=recentRate(opp);
+  items.push({
+    score:Math.abs(teamForm-oppForm)+.02,
+    title:teamForm>=oppForm?'Carry current form':'Reset the form gap',
+    text:`Last-five win-equivalent rate: ${team} ${(teamForm*100).toFixed(0)}% vs ${opp} ${(oppForm*100).toFixed(0)}%.`
+  });
+
+  const venue=model.venue;
+  if(venue){
+    const tv=venue.teams?.find(t=>t.code===team),ov=venue.teams?.find(t=>t.code===opp);
+    if(tv||ov){
+      const ta=tv?.win_pct??50,oa=ov?.win_pct??50;
+      items.push({
+        score:Math.abs(ta-oa)/100+.01,
+        title:ta>=oa?'Lean into venue familiarity':'Overcome venue history',
+        text:`Historical venue win rate: ${team} ${tv?ta.toFixed(0)+'%':'n/a'} vs ${opp} ${ov?oa.toFixed(0)+'%':'n/a'}.`
+      });
+    }
+  }
+
+  const m=model.matchup;
+  if(m.count){
+    const teamIsA=team===$('#predTeamA').value;
+    const val=teamIsA?m.value:1-m.value;
+    items.push({
+      score:Math.abs(val-.5)+.05,
+      title:val>=.5?'Exploit player matchups':'Protect the weak matchups',
+      text:`${m.count} sampled current-roster pairings covering ${m.balls} balls give ${team} a ${(val*100).toFixed(0)}/100 matchup signal.`
+    });
+  }
+
+  const teamN=nrr(team),oppN=nrr(opp);
+  items.push({
+    score:Math.min(.25,Math.abs(teamN-oppN)/4),
+    title:teamN>=oppN?'Sustain run-rate superiority':'Close the run-rate quality gap',
+    text:`Current NRR: ${team} ${teamN>=0?'+':''}${teamN.toFixed(3)} vs ${opp} ${oppN>=0?'+':''}${oppN.toFixed(3)}.`
+  });
+
+  return items.sort((x,y)=>y.score-x.score).slice(0,3);
+}
+
+function winConditionsHtml(items){
+  return items.map((x,i)=>
+    `<div class="winItem"><div class="winNum">${i+1}</div><div><b>${x.title}</b><span>${x.text}</span></div></div>`
+  ).join('');
+}
+
+function pressureRows(a,b){
+  const ra=rosterKeys(a),rb=rosterKeys(b);
+  return directRosterMatchups(a,b)
+    .slice()
+    .sort((x,y)=>y.balls-x.balls||y.dismissals-x.dismissals)
+    .slice(0,7)
+    .map(x=>{
+      const batterTeam=ra.has(x.batter_key)?a:b;
+      const bowlerTeam=ra.has(x.bowler_key)?a:b;
+      const strength=batterMatchupStrength(x);
+      const fav=strength>=.55?`${batterTeam} bat`:strength<=.45?`${bowlerTeam} bowl`:'Even';
+      return {...x,fav};
+    });
+}
+
+function rosterPlayers(code){
+  const keys=rosterKeys(code);
+  return (D.analytics.players||[]).filter(p=>keys.has(p.key));
+}
+
+function swingPlayerScore(p,opp){
+  const bat=p.batting||{},bowl=p.bowling||{};
+  const batBase=Math.log1p(bat.runs||0)*clamp((bat.strike_rate||120)/130,.65,1.45);
+  const bowlBase=Math.log1p((bowl.wickets||0)*14)*clamp(7.5/(bowl.economy||7.5),.65,1.45);
+  const recent=(p.recent||[]).slice(-5).reduce((s,x)=>
+    s+(x.batting?.runs||0)/30+(x.bowling?.wickets||0)*1.3,0
+  )/Math.max(1,Math.min(5,(p.recent||[]).length));
+
+  const oppRoster=rosterKeys(opp);
+  const matchup=(D.analytics.player_matchups||[]).filter(x=>
+    (x.batter_key===p.key&&oppRoster.has(x.bowler_key))||
+    (x.bowler_key===p.key&&oppRoster.has(x.batter_key))
+  );
+  const matchupSample=matchup.reduce((s,x)=>s+Math.min(1,x.balls/20),0);
+  return batBase+bowlBase+recent*2+matchupSample*.8;
+}
+
+function swingRole(p){
+  const runs=p.batting?.runs||0,wk=p.bowling?.wickets||0;
+  if(runs>=250&&wk>=10)return'All-round influence';
+  if(wk>=10&&wk*12>runs)return'Bowling influence';
+  return'Batting influence';
+}
+
+function swingHtml(team,opp){
+  const rows=rosterPlayers(team)
+    .map(p=>({p,score:swingPlayerScore(p,opp)}))
+    .sort((x,y)=>y.score-x.score)
+    .slice(0,3);
+  if(!rows.length)return'<div class="empty">Roster mapping not available.</div>';
+  return `<div class="swingTeam"><b>${byCode[team]}</b>`+
+    rows.map((x,i)=>`<div class="swing"><div class="swingRank">${i+1}</div><div><b>${x.p.player}</b><small>${swingRole(x.p)}</small></div><div class="swingScore">${x.score.toFixed(1)}</div></div>`).join('')+
+    `</div>`;
+}
+
+function predictionBrief(a,b,score,model,conditionsA,conditionsB){
+  const lean=score>=50?a:b,opp=lean===a?b:a;
+  const strength=Math.abs(score-50);
+  const conf=model.evidence.label.toLowerCase();
+  const top=(lean===a?conditionsA:conditionsB)[0];
+  const phaseA=phaseExpectation(a),phaseB=phaseExpectation(b);
+  const venue=model.venue;
+  const cr=chaseRate(venue);
+
+  let text=`<strong>Lean: ${byCode[lean]}</strong> with ${conf} evidence quality. `;
+  text+=`The index is ${score.toFixed(0)}-${(100-score).toFixed(0)} toward ${lean}. `;
+  if(top)text+=`${top.title} is the clearest current win condition. `;
+  if(venue){
+    text+=`${venue.venue} has a ${(cr*100).toFixed(0)}% chase share across decided matches in the loaded history. `;
+  }
+  if(phaseA!=null&&phaseB!=null){
+    const stronger=phaseA>=phaseB?a:b;
+    text+=`${stronger} own the stronger aggregate 100-ball scoring profile from the available phase data. `;
+  }
+  if(model.matchup.count){
+    text+=`The player-matchup layer contains ${model.matchup.count} direct current-roster pairings (${model.matchup.balls} balls).`;
+  }else{
+    text+=`Direct current-roster matchup evidence is limited, so the model is relying more heavily on team-level signals.`;
+  }
+  return text;
+}
+
+function renderPrediction(){
+  if(!D)return;
+  const a=$('#predTeamA').value,b=$('#predTeamB').value;
+  if(!a||!b||a===b)return;
+
+  const model=predictionModel(a,b);
+  const score=scenarioAdjustedScore(model,predictionScenario);
+  const lean=score>=50?a:b;
+  const conf=model.evidence;
+  const venue=model.venue;
+  const cr=chaseRate(venue);
+  const par=contextPar(a,b,venue);
+  const h=h2h(a,b);
+
+  $('#predScore').textContent=`${score.toFixed(0)}–${(100-score).toFixed(0)}`;
+  $('#predLeanText').textContent=`Prediction Index · lean ${byCode[lean]}`;
+  $('#predNeedle').style.left=Math.max(2,Math.min(98,score))+'%';
+  $('#predEdgeA').textContent=byCode[a];
+  $('#predEdgeB').textContent=byCode[b];
+  $('#predConfidence').textContent=`${conf.label} evidence · ${conf.score.toFixed(0)}/100`;
+
+  $('#predComponents').innerHTML=model.components.map(c=>
+    `<div class="comp"><span>${c.label} · ${(c.weight*100).toFixed(0)}%</span><div class="track"><div class="fill" style="width:${c.value*100}%"></div></div><b>${(c.value*100).toFixed(0)}</b></div>`
+  ).join('');
+
+  $('#predKpis').innerHTML=
+    `<div class="kpi"><small>Prediction lean</small><b>${lean}</b><span>${byCode[lean]}</span></div>`+
+    `<div class="kpi"><small>Evidence quality</small><b>${conf.label}</b><span>${conf.score.toFixed(0)}/100 coverage index</span></div>`+
+    `<div class="kpi"><small>Context par</small><b>${par==null?'—':Math.round(par)}</b><span>${venue?.venue||'No venue sample'}</span></div>`+
+    `<div class="kpi"><small>Venue chase share</small><b>${venue?Math.round(cr*100)+'%':'—'}</b><span>${venue?`${venue.chase_wins} chase · ${venue.defend_wins} defend`:'No venue sample'}</span></div>`+
+    `<div class="kpi"><small>Direct matchup sample</small><b>${model.matchup.balls}</b><span>${model.matchup.count} pairings</span></div>`;
+
+  const ca=conditionCandidates(a,b,model),cb=conditionCandidates(b,a,model);
+  $('#winTitleA').textContent=`How ${byCode[a]} wins`;
+  $('#winTitleB').textContent=`How ${byCode[b]} wins`;
+  $('#winA').innerHTML=winConditionsHtml(ca);
+  $('#winB').innerHTML=winConditionsHtml(cb);
+  $('#predBrief').innerHTML=predictionBrief(a,b,score,model,ca,cb);
+
+  $('#scenarioATitle').textContent=`${a} bats first`;
+  $('#scenarioBTitle').textContent=`${b} bats first`;
+  document.querySelectorAll('#scenarioButtons button').forEach(btn=>
+    btn.classList.toggle('on',btn.dataset.scenario===predictionScenario)
+  );
+
+  const pretoss=model.base;
+  const aBat=scenarioAdjustedScore(model,'a_bats');
+  const bBat=scenarioAdjustedScore(model,'b_bats');
+  $('#scenarioOutput').innerHTML=
+    `<div class="stats">`+
+      `<div class="stat"><small>Pre-toss ${a} index</small><b>${pretoss.toFixed(0)}</b></div>`+
+      `<div class="stat"><small>${a} bats first</small><b>${aBat.toFixed(0)}</b></div>`+
+      `<div class="stat"><small>${b} bats first</small><b>${bBat.toFixed(0)}</b></div>`+
+      `<div class="stat"><small>Venue chase share</small><b>${venue?(cr*100).toFixed(0)+'%':'—'}</b></div>`+
+    `</div><p class="desc" style="margin-top:8px">The selected scenario changes only the venue innings-order adjustment; all team-strength inputs remain the same.</p>`;
+
+  const phaseA=phaseExpectation(a),phaseB=phaseExpectation(b);
+  $('#predictionContext').innerHTML=
+    `<div class="stats">`+
+      `<div class="stat"><small>${a} phase projection</small><b>${phaseA==null?'—':Math.round(phaseA)}</b></div>`+
+      `<div class="stat"><small>${b} phase projection</small><b>${phaseB==null?'—':Math.round(phaseB)}</b></div>`+
+      `<div class="stat"><small>H2H sample</small><b>${h.games}</b></div>`+
+      `<div class="stat"><small>BBB freshness</small><b>${D.analytics.ball_by_ball_cutoff||'—'}</b></div>`+
+    `</div><p class="desc" style="margin-top:8px">${venue?`Auto/selected venue: ${venue.venue}. `:''}Context par is a blend of venue first-innings history and the teams' aggregate 25-ball scoring profiles; it is not a bookmaker line or exact expected score.</p>`;
+
+  $('#pressureCutoff').textContent=`BBB ${D.analytics.ball_by_ball_cutoff||'—'}`;
+  const pressure=pressureRows(a,b);
+  $('#pressureBoard').innerHTML=pressure.length
+    ?pressure.map(x=>`<div class="pressure"><div><b>${x.batter} vs ${x.bowler}</b><small>${x.balls} balls · ${x.runs} runs · ${x.dismissals} outs · SR ${fmt(x.strike_rate)}</small></div><span class="pressureTag">${x.fav}</span></div>`).join('')
+    :'<div class="empty">No direct current-roster delivery sample. Confidence automatically discounts the matchup component.</div>';
+
+  $('#swingPlayers').innerHTML=swingHtml(a,b)+swingHtml(b,a);
+}
+
 function findPlayerFromSearch(query){
   const players=D?.analytics?.players||[];
   const q=(query||'').trim().toLowerCase();
@@ -255,7 +709,10 @@ function render(){
     venue:$('#venue').value,
     batter:$('#batterSelect').value,
     bowler:$('#bowlerSelect').value,
-    searchText:$('#playerSearch').value
+    searchText:$('#playerSearch').value,
+    predTeamA:$('#predTeamA')?.value||'',
+    predTeamB:$('#predTeamB')?.value||'',
+    predVenue:$('#predVenue')?.value||''
   };
 
   $('#updated').textContent=new Date(D.generated_at_utc).toLocaleString()+' · '+ago(D.generated_at_utc);
@@ -293,6 +750,19 @@ function render(){
     $('#venue').value=prev.venue;
   }
 
+  // Prediction Center has its own independent match context.
+  $('#predTeamA').innerHTML=opts;
+  $('#predTeamB').innerHTML=opts;
+  $('#predTeamA').value=validTeam(prev.predTeamA)?prev.predTeamA:$('#teamA').value;
+  $('#predTeamB').value=validTeam(prev.predTeamB)&&prev.predTeamB!==$('#predTeamA').value
+    ?prev.predTeamB
+    :$('#teamB').value;
+  $('#predVenue').innerHTML='<option value="">Auto venue context</option>'+
+    D.analytics.venues.map(v=>`<option>${v.venue}</option>`).join('');
+  if(prev.predVenue && D.analytics.venues.some(v=>v.venue===prev.predVenue)){
+    $('#predVenue').value=prev.predVenue;
+  }
+
   const players=(D.analytics.players||[]).slice().sort((a,b)=>a.player.localeCompare(b.player));
   $('#playersList').innerHTML=players.map(p=>`<option value="${p.player}"></option>`).join('');
 
@@ -322,6 +792,7 @@ function render(){
   }
 
   renderMatch();
+  renderPrediction();
   renderPlayer();
   renderPVH();
   renderMatrix();
@@ -331,6 +802,25 @@ function render(){
   $('#sources').innerHTML=Object.values(D.sources||{}).map(s=>`<div class="source"><div class="health"><span class="dot ${s.status==='ok'?'ok':'bad'}"></span><b>${s.name}</b></div><p>${s.detail||s.error||''}<br>${s.url||''}</p></div>`).join('');
   $('#coverage').innerHTML=Object.entries(D.method||{}).map(([k,v])=>`<div class="source"><b>${k}</b><p>${v}</p></div>`).join('');
 }
+$('#predTeamA').addEventListener('change',()=>{
+  if($('#predTeamA').value===$('#predTeamB').value){
+    const alt=D.teams.find(t=>t.code!==$('#predTeamA').value);
+    if(alt)$('#predTeamB').value=alt.code;
+  }
+  renderPrediction();
+});
+$('#predTeamB').addEventListener('change',()=>{
+  if($('#predTeamA').value===$('#predTeamB').value){
+    const alt=D.teams.find(t=>t.code!==$('#predTeamB').value);
+    if(alt)$('#predTeamA').value=alt.code;
+  }
+  renderPrediction();
+});
+$('#predVenue').addEventListener('change',renderPrediction);
+document.querySelectorAll('#scenarioButtons button').forEach(btn=>btn.addEventListener('click',()=>{
+  predictionScenario=btn.dataset.scenario;
+  renderPrediction();
+}));
 $('#teamA').addEventListener('change',renderMatch);$('#teamB').addEventListener('change',renderMatch);$('#venue').addEventListener('change',()=>renderVenue($('#teamA').value,$('#teamB').value));$('#playerSearch').addEventListener('change',commitPlayerSearch);
 $('#playerSearch').addEventListener('keydown',e=>{
   if(e.key==='Enter'){
