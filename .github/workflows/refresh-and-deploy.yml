@@ -19,6 +19,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -32,8 +33,21 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Clear previous failed-refresh marker
+        run: rm -f data/last_failed_refresh.json
+
       - name: Refresh and validate cricket data
+        id: refresh
+        continue-on-error: true
         run: python scripts/refresh_data.py
+
+      - name: Report refresh result
+        run: |
+          if [ "${{ steps.refresh.outcome }}" = "success" ]; then
+            echo "Data refresh succeeded. Deploying newly verified data."
+          else
+            echo "::warning::Data refresh failed validation. Deploying the latest UI with the last verified current.json."
+          fi
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
@@ -47,8 +61,10 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+
     runs-on: ubuntu-latest
     needs: build
+
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
