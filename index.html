@@ -31,6 +31,19 @@
 .modelNote{font-size:9px;line-height:1.5;color:var(--muted);border-left:3px solid var(--amber);padding-left:9px}
 @media(max-width:900px){.predHero,.predGrid,.swingGrid{grid-template-columns:1fr}.scenario{grid-template-columns:1fr}}
 
+
+.activeScenario{padding:14px;background:var(--panel2);border:1px solid var(--line);border-radius:13px;margin-bottom:10px}
+.activeScenarioTop{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.activeScenarioLabel{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;font-weight:900}
+.activeScenarioTitle{font-size:15px;font-weight:900;margin-top:3px}
+.activeScenarioScore{font-size:29px;font-weight:900;letter-spacing:-.04em;line-height:1}
+.activeScenarioScore small{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:0}
+.activeScenarioShift{display:inline-block;margin-top:7px;padding:4px 7px;border:1px solid var(--line);border-radius:999px;font-size:9px;font-weight:800}
+.activeScenarioExplain{font-size:10px;color:var(--muted);line-height:1.5;margin-top:9px}
+.scenarioCompare{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+.scenarioCompare .stat.active{border:1px solid var(--cyan);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--cyan) 35%,transparent)}
+@media(max-width:700px){.scenarioCompare{grid-template-columns:1fr}}
+
 </style></head>
 <body><div class="app">
 <header class="hero"><div><div class="ey">The Hundred Men · Analyst Workspace</div><h1>Pre-Match Intelligence</h1><div class="sub">Current career records, team H2H, recent form, venue context, phase profiles and batter-v-bowler matchups in one shareable workspace. Current totals and delivery-level analytics show separate freshness cutoffs.</div></div><div class="stamp"><small>Latest verified refresh</small><b id="updated">Loading…</b><div class="health"><span id="healthDot" class="dot"></span><span id="healthText">Checking</span></div></div></header>
@@ -77,7 +90,7 @@
 
 <div class="grid equal">
   <div class="card">
-    <div class="head"><div><h2>Toss & innings simulator</h2><div class="desc">Uses historical venue chase/defend balance to adjust the base index.</div></div></div>
+    <div class="head"><div><h2>Toss & innings simulator</h2><div class="desc">Select a scenario to recalculate the active prediction using historical venue chase/defend balance.</div></div></div>
     <div class="scenario" id="scenarioButtons">
       <button data-scenario="pretoss" class="on"><b>Pre-toss</b><small>No innings-order adjustment</small></button>
       <button data-scenario="a_bats"><b id="scenarioATitle">Team A bats first</b><small>Team B chases</small></button>
@@ -596,13 +609,46 @@ function renderPrediction(){
   const pretoss=model.base;
   const aBat=scenarioAdjustedScore(model,'a_bats');
   const bBat=scenarioAdjustedScore(model,'b_bats');
+  const activeScore=scenarioAdjustedScore(model,predictionScenario);
+  const activeOppScore=100-activeScore;
+  const shift=activeScore-pretoss;
+  const scenarioLabel=
+    predictionScenario==='a_bats'
+      ?`${byCode[a]} bats first · ${byCode[b]} chases`
+      :predictionScenario==='b_bats'
+        ?`${byCode[b]} bats first · ${byCode[a]} chases`
+        :'Pre-toss · innings order unknown';
+
+  let explanation='';
+  if(predictionScenario==='pretoss'){
+    explanation='No innings-order adjustment is applied. This is the base pre-toss model.';
+  }else if(!venue){
+    explanation='No usable venue chase/defend history is available, so the innings-order adjustment is neutral.';
+  }else{
+    const chasingTeam=predictionScenario==='a_bats'?b:a;
+    const battingFirstTeam=predictionScenario==='a_bats'?a:b;
+    const favoursChasing=cr>.5;
+    const magnitude=Math.abs(shift).toFixed(1);
+    explanation=
+      `${venue.venue} has a ${(cr*100).toFixed(0)}% chase share in the loaded decided-match history. `+
+      `${favoursChasing?`That gives ${byCode[chasingTeam]} a venue-based innings-order boost`:`That gives ${byCode[battingFirstTeam]} a venue-based defend-first boost`}`+
+      `${Number(magnitude)>0?` of about ${magnitude} index points.`:'.'}`;
+  }
+
   $('#scenarioOutput').innerHTML=
-    `<div class="stats">`+
-      `<div class="stat"><small>Pre-toss ${a} index</small><b>${pretoss.toFixed(0)}</b></div>`+
-      `<div class="stat"><small>${a} bats first</small><b>${aBat.toFixed(0)}</b></div>`+
-      `<div class="stat"><small>${b} bats first</small><b>${bBat.toFixed(0)}</b></div>`+
-      `<div class="stat"><small>Venue chase share</small><b>${venue?(cr*100).toFixed(0)+'%':'—'}</b></div>`+
-    `</div><p class="desc" style="margin-top:8px">The selected scenario changes only the venue innings-order adjustment; all team-strength inputs remain the same.</p>`;
+    `<div class="activeScenario">`+
+      `<div class="activeScenarioTop">`+
+        `<div><div class="activeScenarioLabel">Selected scenario</div><div class="activeScenarioTitle">${scenarioLabel}</div></div>`+
+        `<div class="activeScenarioScore">${a} ${activeScore.toFixed(0)} <small>vs</small> ${b} ${activeOppScore.toFixed(0)}</div>`+
+      `</div>`+
+      `<div class="activeScenarioShift">${shift===0?'No change vs pre-toss':`${shift>0?'+':''}${shift.toFixed(1)} ${a} index points vs pre-toss`}</div>`+
+      `<div class="activeScenarioExplain">${explanation}</div>`+
+    `</div>`+
+    `<div class="scenarioCompare">`+
+      `<div class="stat ${predictionScenario==='pretoss'?'active':''}"><small>Pre-toss · ${a}</small><b>${pretoss.toFixed(0)}</b></div>`+
+      `<div class="stat ${predictionScenario==='a_bats'?'active':''}"><small>${a} bats first · ${a}</small><b>${aBat.toFixed(0)}</b></div>`+
+      `<div class="stat ${predictionScenario==='b_bats'?'active':''}"><small>${b} bats first · ${a}</small><b>${bBat.toFixed(0)}</b></div>`+
+    `</div>`;
 
   const phaseA=phaseExpectation(a),phaseB=phaseExpectation(b);
   $('#predictionContext').innerHTML=
