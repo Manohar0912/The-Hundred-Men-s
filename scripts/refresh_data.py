@@ -17,6 +17,8 @@ CRICSHEET_HUNDRED = "https://cricsheet.org/downloads/hnd_json.zip"
 CRICSHEET_LOCAL_CANDIDATES = [ROOT / "data" / "hnd_json.zip", ROOT / "hnd_json.zip"]
 CRICBUZZ_TABLE = "https://www.cricbuzz.com/cricket-series/11493/the-hundred-mens-competition-2026/points-table"
 CRICBUZZ_BASE = "https://www.cricbuzz.com"
+IPL_HUNDRED_SERIES = "https://www.ipl.com/matches/the-hundred-mens-129912"
+IPL_MATCH_ID_BASE = 95162
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -34,6 +36,17 @@ TEAM_NAMES = {
     "SOU": "Southern Brave",
     "LDN": "London Spirit",
     "BRM": "Birmingham Phoenix",
+}
+
+IPL_TEAM_SLUGS = {
+    "TRE": "trent-rockets-men",
+    "MIL": "mi-london-men",
+    "WEF": "welsh-fire-men",
+    "MSG": "manchester-super-giants-men",
+    "SUL": "sunrisers-leeds-men",
+    "SOU": "southern-brave-men",
+    "LDN": "london-spirit-men",
+    "BRM": "birmingham-phoenix-men",
 }
 
 TEAM_ALIASES = {
@@ -524,72 +537,6 @@ def split_scorecard_sections(lines):
 
     return batting, bowling
 
-def extract_bowling_rows_anywhere(lines):
-    """
-    Recover bowling figures from the full visible scorecard text without
-    depending on Cricbuzz's table DOM.
-
-    Bowling rows satisfy:
-        name | B | D | R | W | RPB
-    and, critically:
-        R / B ~= RPB
-    """
-    rows = []
-    seen = set()
-    blocked = {
-        "Batter", "Bowler", "Extras", "Total", "Did not Bat",
-        "Fall of Wickets", "Score", "Ball", "Partnerships",
-        "INFO", "Match", "Series", "Date", "Time", "Toss", "Venue",
-        "Umpires", "Referee", "Players", "Bench", "Support Staff",
-        "B", "D", "R", "W", "RPB", "SR", "4s", "6s",
-    }
-
-    def as_int(x):
-        x = str(x).strip()
-        return int(x) if re.fullmatch(r"\d+", x) else None
-
-    def as_float(x):
-        x = str(x).strip().replace("−", "-")
-        return float(x) if re.fullmatch(r"\d+(?:\.\d+)?", x) else None
-
-    for i, raw in enumerate(lines):
-        raw = str(raw).strip()
-        if not raw or raw in blocked:
-            continue
-
-        name = clean_role(raw)
-        if not name or len(name) > 60 or not re.search(r"[A-Za-z]", name):
-            continue
-
-        for k in range(i + 1, min(i + 5, len(lines) - 4)):
-            b = as_int(lines[k])
-            d = as_int(lines[k + 1])
-            r = as_int(lines[k + 2])
-            w = as_int(lines[k + 3])
-            rpb = as_float(lines[k + 4])
-
-            if None in (b, d, r, w, rpb):
-                continue
-            if not (1 <= b <= 20 and 0 <= d <= b and 0 <= r <= 80 and 0 <= w <= 10):
-                continue
-            if not (0 <= rpb <= 6):
-                continue
-            if abs((r / b) - rpb) > 0.08:
-                continue
-
-            key = person_key(name)
-            if not key:
-                continue
-            sig = (key, b, r, w)
-            if sig in seen:
-                break
-
-            seen.add(sig)
-            rows.append({"name": name, "balls": b, "runs": r, "wickets": w})
-            break
-
-    return rows
-
 def parse_url_codes(url):
     m = re.search(r"/\d+/([a-z]+)-vs-([a-z]+)-", url, flags=re.I)
     if not m:
@@ -698,12 +645,6 @@ def aggregate_cricbuzz_2026(base):
         soup = BeautifulSoup(html, "html.parser")
         lines = [re.sub(r"\s+", " ", x).strip() for x in soup.stripped_strings]
         batting, bowling = split_scorecard_sections(lines)
-        fallback_bowling = extract_bowling_rows_anywhere(lines)
-
-        structured_count = sum(len(x) for x in bowling)
-        if fallback_bowling and len(fallback_bowling) >= structured_count:
-            bowling = [fallback_bowling]
-
         if not batting:
             continue
         parsed += 1
@@ -735,7 +676,10 @@ def aggregate_cricbuzz_2026(base):
                 if key:
                     match_seen.add(key)
                     match_player[key]["bowling"] = dict(r)
-            add_bowling_innings(stats, display_names, inn, prefer_name=True)
+            # Career bowling is deliberately NOT added here.
+            # Cricbuzz's current bowling table markup has proven unstable.
+            # A separate IPL.com scorecard pass below is the source of truth
+            # for all 2026 bowling figures.
 
         for key in match_seen:
             stats[key]["matches"] += 1
@@ -794,6 +738,191 @@ def aggregate_cricbuzz_2026(base):
         "player_recent": player_recent,
         "current_team": current_team,
         "match_summaries": current_match_summaries,
+    }
+
+def parse_cricbuzz_match_number_and_codes(url):
+    """
+    Cricbuzz result URL example:
+      .../sul-vs-brm-24th-match-the-hundred-mens-competition-2026
+    """
+    m = re.search(
+        r"/([a-z]+)-vs-([a-z]+)-(\d+)(?:st|nd|rd|th)-match-",
+        url,
+        flags=re.I,
+    )
+    if not m:
+        return None
+    a, b, num = m.group(1).upper(), m.group(2).upper(), int(m.group(3))
+    if a not in TEAM_NAMES or b not in TEAM_NAMES:
+        return None
+    return a, b, num
+
+
+def build_ipl_scorecard_url(cricbuzz_url):
+    parsed = parse_cricbuzz_match_number_and_codes(cricbuzz_url)
+    if not parsed:
+        return None
+    a, b, match_no = parsed
+    match_id = IPL_MATCH_ID_BASE + match_no
+    return (
+        f"{IPL_HUNDRED_SERIES}/"
+        f"{IPL_TEAM_SLUGS[a]}-vs-{IPL_TEAM_SLUGS[b]}-{match_id}/scorecard"
+    )
+
+
+def overs_to_balls(token):
+    token = str(token).strip()
+    if re.fullmatch(r"\d+", token):
+        overs, rem = int(token), 0
+    else:
+        m = re.fullmatch(r"(\d+)\.([0-5])", token)
+        if not m:
+            return None
+        overs, rem = int(m.group(1)), int(m.group(2))
+    balls = overs * 6 + rem
+    return balls if 0 < balls <= 20 else None
+
+
+def extract_ipl_bowling_rows(lines):
+    """
+    IPL.com renders Hundred bowling as:
+      player | O | M | R | W | ECO
+
+    Their over notation is conventional 6-ball notation even for a Hundred
+    scorecard: 20 balls appears as 3.2 overs, 15 balls as 2.3 overs.
+
+    Validate every candidate using:
+      economy ~= runs * 6 / balls
+    so batting rows/commentary cannot be mistaken for bowling figures.
+    """
+    blocked = {
+        "Batting", "Bowling", "O", "M", "R", "W", "ECO",
+        "R", "B", "4s", "6s", "S/R", "Extras", "Total",
+        "FALL OF WICKETS", "Match Flow", "Points Table",
+        "Team", "M", "W", "L", "T", "NR",
+    }
+    rows = []
+    seen = set()
+
+    def as_int(x):
+        x = str(x).strip()
+        return int(x) if re.fullmatch(r"\d+", x) else None
+
+    def as_float(x):
+        x = str(x).strip().replace("−", "-")
+        return float(x) if re.fullmatch(r"\d+(?:\.\d+)?", x) else None
+
+    for i, raw in enumerate(lines):
+        raw = str(raw).strip()
+        if not raw or raw in blocked:
+            continue
+
+        name = clean_role(raw)
+        if (
+            not name
+            or len(name) > 60
+            or not re.search(r"[A-Za-z]", name)
+            or name.lower().startswith(("image", "powerplay", "strategic timeout"))
+        ):
+            continue
+
+        # The numeric tail is normally immediate. Allow up to two intervening
+        # presentation nodes in case the site inserts a role/image label.
+        for k in range(i + 1, min(i + 4, len(lines) - 4)):
+            balls = overs_to_balls(lines[k])
+            maidens = as_int(lines[k + 1])
+            runs = as_int(lines[k + 2])
+            wickets = as_int(lines[k + 3])
+            economy = as_float(lines[k + 4])
+
+            if None in (balls, maidens, runs, wickets, economy):
+                continue
+            if not (0 <= maidens <= 4 and 0 <= runs <= 100 and 0 <= wickets <= 10):
+                continue
+
+            expected = runs * 6 / balls
+            if abs(expected - economy) > 0.16:
+                continue
+
+            key = person_key(name)
+            if not key:
+                continue
+            sig = (key, balls, runs, wickets)
+            if sig in seen:
+                break
+
+            seen.add(sig)
+            rows.append({
+                "name": name,
+                "balls": balls,
+                "runs": runs,
+                "wickets": wickets,
+            })
+            break
+
+    return rows
+
+
+def aggregate_ipl_bowling_2026(base, cricbuzz_urls):
+    """
+    Recompute ALL current-season bowling from IPL.com scorecards.
+
+    We intentionally do not mix this with Cricbuzz bowling rows. Each 2026
+    match is added once from one bowling source, preventing partial/double
+    counting.
+    """
+    stats = base["stats"]
+    display_names = base["display_names"]
+
+    fetched = 0
+    parsed_matches = 0
+    bowling_rows = 0
+    wickets_added = 0
+    failed_urls = []
+
+    for cb_url in cricbuzz_urls:
+        url = build_ipl_scorecard_url(cb_url)
+        if not url:
+            continue
+
+        try:
+            html = get(url).text
+        except Exception as e:
+            failed_urls.append(f"{url}: {e}")
+            continue
+
+        fetched += 1
+        soup = BeautifulSoup(html, "html.parser")
+        lines = [re.sub(r"\s+", " ", x).strip() for x in soup.stripped_strings]
+        rows = extract_ipl_bowling_rows(lines)
+
+        # A completed Hundred scorecard should normally contain at least
+        # roughly 7-10 bowling rows across both innings.
+        if len(rows) < 5:
+            failed_urls.append(f"{url}: only {len(rows)} bowling rows parsed")
+            continue
+
+        parsed_matches += 1
+        bowling_rows += len(rows)
+        wickets_added += sum(r["wickets"] for r in rows)
+        add_bowling_innings(stats, display_names, rows, prefer_name=True)
+
+    # We expect the current completed-match set discovered by Cricbuzz to be
+    # broadly available at IPL.com too. Allow one transient miss, not a silent
+    # partial season.
+    minimum = max(20, len(cricbuzz_urls) - 1)
+    if parsed_matches < minimum:
+        raise RuntimeError(
+            f"IPL bowling source parsed {parsed_matches}/{len(cricbuzz_urls)} "
+            f"2026 scorecards (minimum {minimum}); first failures: {failed_urls[:3]}"
+        )
+
+    return {
+        "fetched": fetched,
+        "parsed": parsed_matches,
+        "rows": bowling_rows,
+        "wickets_added": wickets_added,
+        "failed": failed_urls,
     }
 
 def build_career_tables(stats, display_names, current_team):
@@ -1004,24 +1133,49 @@ def main():
         try:
             current = aggregate_cricbuzz_2026(base)
             sources["current_matches"] = {
-                "name": "Cricbuzz – 2026 scorecards",
+                "name": "Cricbuzz – 2026 batting, results and squads",
                 "url": CRICBUZZ_TABLE,
                 "status": "ok",
                 "last_success": refreshed,
                 "detail": (
                     f"{current['parsed']} scorecards parsed / {current['discovered']} discovered; "
-                    f"Salt 2026 runs added={base['stats'].get('psalt', {}).get('runs', 0)-salt_hist}; "
-                    f"Adil Rashid 2026 wickets added={base['stats'].get('arashid', {}).get('wickets', 0)-adil_hist}"
+                    f"Salt 2026 runs added={base['stats'].get('psalt', {}).get('runs', 0)-salt_hist}"
                 ),
             }
         except Exception as e:
             failures.append(f"current_matches: {e}")
             sources["current_matches"] = {
-                "name": "Cricbuzz – 2026 scorecards",
+                "name": "Cricbuzz – 2026 batting, results and squads",
                 "url": CRICBUZZ_TABLE,
                 "status": "error",
                 "error": str(e),
             }
+
+        if current:
+            try:
+                current_urls = get_2026_scorecard_urls()
+                ipl_bowling = aggregate_ipl_bowling_2026(base, current_urls)
+                sources["current_bowling"] = {
+                    "name": "IPL.com – 2026 bowling scorecards",
+                    "url": "https://www.ipl.com/completed-cricket-score-129912",
+                    "status": "ok",
+                    "last_success": refreshed,
+                    "detail": (
+                        f"{ipl_bowling['parsed']} current scorecards; "
+                        f"{ipl_bowling['rows']} bowling rows; "
+                        f"{ipl_bowling['wickets_added']} wickets aggregated; "
+                        f"Adil Rashid 2026 wickets added="
+                        f"{base['stats'].get('arashid', {}).get('wickets', 0)-adil_hist}"
+                    ),
+                }
+            except Exception as e:
+                failures.append(f"current_bowling: {e}")
+                sources["current_bowling"] = {
+                    "name": "IPL.com – 2026 bowling scorecards",
+                    "url": "https://www.ipl.com/completed-cricket-score-129912",
+                    "status": "error",
+                    "error": str(e),
+                }
 
     try:
         standings = cricbuzz_standings()
@@ -1086,7 +1240,7 @@ def main():
         "standings": standings,
         "analytics": analytics,
         "method": {
-            "career": "End-2025 Cricsheet career baseline + every available 2026 Cricbuzz scorecard, recomputed on refresh.",
+            "career": "End-2025 Cricsheet baseline + 2026 Cricbuzz batting/results + 2026 IPL.com bowling scorecards, recomputed on refresh.",
             "team_h2h": "Completed 2021–2025 Cricsheet results + completed/currently published 2026 Cricbuzz results.",
             "player_h2h": "Delivery-level batter-v-bowler analysis from the local Cricsheet archive; freshness is shown separately.",
             "economy": "Bowling economy is shown as runs per 6 balls to align with conventional ESPN-style career economy.",
