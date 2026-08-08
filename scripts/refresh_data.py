@@ -17,6 +17,7 @@ CRICSHEET_HUNDRED = "https://cricsheet.org/downloads/hnd_json.zip"
 CRICSHEET_LOCAL_CANDIDATES = [ROOT / "data" / "hnd_json.zip", ROOT / "hnd_json.zip"]
 CRICBUZZ_TABLE = "https://www.cricbuzz.com/cricket-series/11493/the-hundred-mens-competition-2026/points-table"
 CRICBUZZ_BASE = "https://www.cricbuzz.com"
+CRICBUZZ_SERIES_STATS = "https://www.cricbuzz.com/cricket-series/11493/the-hundred-mens-competition-2026/stats/"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -524,67 +525,241 @@ def split_scorecard_sections(lines):
 
     return batting, bowling
 
-def extract_cricbuzz_bowling_from_scorecard(soup):
+def parse_cricbuzz_most_wickets():
     """
-    Parse The Hundred Men's bowling tables directly from Cricbuzz scorecards.
+    Source of truth for CURRENT 2026 bowling aggregates.
 
-    Visible text is bounded by:
-        Bowler B D R W RPB
-        ...
-        Fall of Wickets
+    Cricbuzz exposes a tournament statistics view using:
+      statsType=mostWickets
+
+    Expected columns:
+      PLAYER | MATCHES | OVERS | BALLS | WKTS | Avg | RUNS | 4-FERS | 5-FERS
+
+    We first parse actual HTML table rows. A token-based fallback is included
+    because Cricbuzz has used both table and div-based presentation layouts.
     """
-    text = re.sub(r"\s+", " ", soup.get_text(" ", strip=True))
-    sections = re.findall(
-        r"Bowler\s+B\s+D\s+R\s+W\s+RPB\s+(.*?)(?=Fall of Wickets)",
-        text,
-        flags=re.I,
-    )
+    urls = [
+        (
+            CRICBUZZ_SERIES_STATS
+            + "?seriesId=11493&seriesType=&statsType=mostWickets"
+        ),
+        (
+            CRICBUZZ_SERIES_STATS.rstrip("/")
+            + "?seriesId=11493&seriesType=&statsType=mostWickets"
+        ),
+    ]
 
-    row_re = re.compile(
-        r"([A-Za-z][A-Za-zÀ-ÿ .'\-&]*(?:\s+\([^)]*\))?)\s+"
-        r"(\d{1,2})\s+"
-        r"(\d{1,2})\s+"
-        r"(\d{1,3})\s+"
-        r"(\d{1,2})\s+"
-        r"(\d+(?:\.\d+)?)"
-    )
+    last_error = None
 
-    rows = []
-    seen = set()
+    for url in urls:
+        try:
+            html = get(url).text
+        except Exception as e:
+            last_error = e
+            continue
 
-    for section in sections:
-        for m in row_re.finditer(section):
-            name = clean_role(m.group(1))
-            balls = int(m.group(2))
-            dots = int(m.group(3))
-            runs = int(m.group(4))
-            wickets = int(m.group(5))
-            rpb = float(m.group(6))
+        soup = BeautifulSoup(html, "html.parser")
+        parsed = {}
 
-            if not (1 <= balls <= 20 and 0 <= dots <= balls):
-                continue
-            if not (0 <= runs <= 100 and 0 <= wickets <= 10 and 0 <= rpb <= 6):
-                continue
-            if abs((runs / balls) - rpb) > 0.08:
+        # ---------------- DOM table parser ----------------
+        for table in soup.find_all("table"):
+            trs = table.find_all("tr")
+            if not trs:
                 continue
 
-            key = person_key(name)
-            if not key:
-                continue
+            header = None
+            header_map = {}
 
-            sig = (key, balls, runs, wickets)
-            if sig in seen:
-                continue
-            seen.add(sig)
+            for tr in trs:
+                cells = [
+                    re.sub(r"\s+", " ", c.get_text(" ", strip=True)).strip()
+                    for c in tr.find_all(["th", "td"])
+                ]
+                if not cells:
+                    continue
 
-            rows.append({
-                "name": name,
-                "balls": balls,
-                "runs": runs,
-                "wickets": wickets,
-            })
+                upper = [x.upper() for x in cells]
+                if (
+                    "PLAYER" in upper
+                    and any(x in upper for x in ("WKTS", "WICKETS"))
+                    and "BALLS" in upper
+                ):
+                    header = cells
+                    header_map = {x.upper(): i for i, x in enumerate(cells)}
+                    continue
 
-    return rows
+                if header is None:
+                    continue
+
+                def cell(names, default=None):
+                    for name in names:
+                        idx = header_map.get(name.upper())
+                        if idx is not None and idx < len(cells):
+                            return cells[idx]
+                    return default
+
+                player = clean_role(cell(["PLAYER"], "") or "")
+                if not player:
+                    continue
+
+                try:
+                    matches = int(cell(["MATCHES", "M"], "0"))
+                    balls = int(cell(["BALLS", "B"], "0"))
+                    wickets = int(cell(["WKTS", "WICKETS", "W"], "0"))
+                    runs = int(cell(["RUNS", "R"], "0"))
+                except Exception:
+                    continue
+
+                avg_raw = cell(["AVG", "AVE"], None)
+                try:
+                    average = float(avg_raw) if avg_raw not in (None, "-", "--") else None
+                except Exception:
+                    average = None
+
+                if matches <= 0 or balls < 0 or wickets < 0 or runs < 0:
+                    continue
+
+                key = person_key(player)
+                if not key:
+                    continue
+
+                parsed[key] = {
+                    "key": key,
+                    "player": player,
+                    "matches": matches,
+                    "balls": balls,
+                    "wickets": wickets,
+                    "runs": runs,
+                    "average": average,
+                }
+
+        # ---------------- token fallback ----------------
+        if len(parsed) < 8:
+            tokens = [
+                re.sub(r"\s+", " ", x).strip()
+                for x in soup.stripped_strings
+                if str(x).strip()
+            ]
+
+            header_i = None
+            for i in range(len(tokens) - 8):
+                window = [x.upper() for x in tokens[i:i+9]]
+                if (
+                    window[0] == "PLAYER"
+                    and window[1] in {"MATCHES", "M"}
+                    and window[3] == "BALLS"
+                    and window[4] in {"WKTS", "WICKETS"}
+                ):
+                    header_i = i
+                    break
+
+            if header_i is not None:
+                i = header_i + 9
+                while i + 8 < len(tokens):
+                    if tokens[i] in {
+                        "Most Wickets", "Best Bowling Average", "Best Bowling",
+                        "APPS", "FOLLOW US ON", "Batting", "Bowling"
+                    }:
+                        break
+
+                    row = tokens[i:i+9]
+                    player = clean_role(row[0])
+                    try:
+                        matches = int(row[1])
+                        # row[2] is OVERS; row[3] is BALLS
+                        balls = int(row[3])
+                        wickets = int(row[4])
+                        average = float(row[5]) if row[5] not in {"-", "--"} else None
+                        runs = int(row[6])
+                    except Exception:
+                        i += 1
+                        continue
+
+                    key = person_key(player)
+                    if key and matches > 0:
+                        parsed[key] = {
+                            "key": key,
+                            "player": player,
+                            "matches": matches,
+                            "balls": balls,
+                            "wickets": wickets,
+                            "runs": runs,
+                            "average": average,
+                        }
+                        i += 9
+                    else:
+                        i += 1
+
+        rows = list(parsed.values())
+        rows.sort(key=lambda x: (x["wickets"], -x["runs"]), reverse=True)
+
+        # Tournament stats page should expose a meaningful leaderboard.
+        if len(rows) >= 8:
+            return rows, url
+
+        last_error = RuntimeError(
+            f"Most-wickets page parsed only {len(rows)} bowling rows"
+        )
+
+    raise RuntimeError(f"Could not parse current tournament bowling stats: {last_error}")
+
+
+def merge_current_bowling(stats, display_names, scorecard_bowling, leaderboard_rows):
+    """
+    Merge 2026 bowling ONCE.
+
+    1) Scorecard-derived season totals supply broad player coverage.
+    2) Tournament 'Most Wickets' aggregates override players appearing on the
+       official Cricbuzz season leaderboard. This makes the leading/current
+       career records resistant to scorecard markup changes.
+    3) Only after the overrides are complete do we add the 2026 season totals
+       to the end-2025 historical baseline.
+    """
+    season = {}
+
+    # Start with broad coverage from scorecards when available.
+    for key, row in scorecard_bowling.items():
+        season[key] = {
+            "key": key,
+            "player": row["player"],
+            "balls": int(row["balls"]),
+            "runs": int(row["runs"]),
+            "wickets": int(row["wickets"]),
+            "matches": int(row.get("matches", 0)),
+            "source": "scorecards",
+        }
+
+    # Override all leaderboard players with aggregate season truth.
+    for row in leaderboard_rows:
+        key = row["key"]
+        season[key] = {
+            "key": key,
+            "player": row["player"],
+            "balls": int(row["balls"]),
+            "runs": int(row["runs"]),
+            "wickets": int(row["wickets"]),
+            "matches": int(row["matches"]),
+            "source": "tournament-most-wickets",
+        }
+
+    for key, row in season.items():
+        rec = stats.setdefault(key, new_player())
+        display = clean_role(row["player"])
+        if display:
+            current = display_names.get(key, "")
+            if not current or len(display) >= len(current):
+                display_names[key] = display
+            if not rec["display"] or len(display) >= len(rec["display"]):
+                rec["display"] = display
+
+        rec["balls_bowled"] += row["balls"]
+        rec["runs_conceded"] += row["runs"]
+        rec["wickets"] += row["wickets"]
+
+        # Do not add match appearances here: aggregate_cricbuzz_2026 already
+        # counts the current XI once per match through squad data.
+
+    return season
 
 def parse_url_codes(url):
     m = re.search(r"/\d+/([a-z]+)-vs-([a-z]+)-", url, flags=re.I)
@@ -688,17 +863,15 @@ def aggregate_cricbuzz_2026(base):
     player_recent = defaultdict(list)
     current_team = {}
     current_match_summaries = []
+    scorecard_bowling = defaultdict(
+        lambda: {"player": "", "balls": 0, "runs": 0, "wickets": 0, "matches": 0}
+    )
 
     for url in urls:
         html = get(url).text
         soup = BeautifulSoup(html, "html.parser")
         lines = [re.sub(r"\s+", " ", x).strip() for x in soup.stripped_strings]
         batting, bowling = split_scorecard_sections(lines)
-
-        direct_bowling = extract_cricbuzz_bowling_from_scorecard(soup)
-        if direct_bowling:
-            bowling = [direct_bowling]
-
         if not batting:
             continue
         parsed += 1
@@ -724,13 +897,25 @@ def aggregate_cricbuzz_2026(base):
                     match_player[key]["batting"] = dict(r)
             add_batting_innings(stats, display_names, inn, prefer_name=True)
 
+        seen_bowlers_this_match = set()
         for inn in bowling:
             for r in inn:
                 key, _ = ensure(stats, display_names, r["name"], prefer_name=True)
                 if key:
                     match_seen.add(key)
                     match_player[key]["bowling"] = dict(r)
-            add_bowling_innings(stats, display_names, inn, prefer_name=True)
+
+                    sb = scorecard_bowling[key]
+                    sb["player"] = clean_role(r["name"])
+                    sb["balls"] += int(r["balls"])
+                    sb["runs"] += int(r["runs"])
+                    sb["wickets"] += int(r["wickets"])
+                    if key not in seen_bowlers_this_match:
+                        sb["matches"] += 1
+                        seen_bowlers_this_match.add(key)
+
+        # Important: career bowling is NOT mutated here. We merge the whole
+        # current season exactly once after tournament aggregate overrides.
 
         for key in match_seen:
             stats[key]["matches"] += 1
@@ -789,6 +974,7 @@ def aggregate_cricbuzz_2026(base):
         "player_recent": player_recent,
         "current_team": current_team,
         "match_summaries": current_match_summaries,
+        "scorecard_bowling": dict(scorecard_bowling),
     }
 
 def build_career_tables(stats, display_names, current_team):
@@ -999,24 +1185,69 @@ def main():
         try:
             current = aggregate_cricbuzz_2026(base)
             sources["current_matches"] = {
-                "name": "Cricbuzz – The Hundred Men’s Competition 2026 scorecards",
+                "name": "Cricbuzz – The Hundred Men’s Competition 2026 scorecards/results",
                 "url": CRICBUZZ_TABLE,
                 "status": "ok",
                 "last_success": refreshed,
                 "detail": (
                     f"{current['parsed']} scorecards parsed / {current['discovered']} discovered; "
-                    f"Salt 2026 runs added={base['stats'].get('psalt', {}).get('runs', 0)-salt_hist}; "
-                    f"Adil Rashid 2026 wickets added={base['stats'].get('arashid', {}).get('wickets', 0)-adil_hist}"
+                    f"Salt 2026 runs added={base['stats'].get('psalt', {}).get('runs', 0)-salt_hist}"
                 ),
             }
         except Exception as e:
             failures.append(f"current_matches: {e}")
             sources["current_matches"] = {
-                "name": "Cricbuzz – The Hundred Men’s Competition 2026 scorecards",
+                "name": "Cricbuzz – The Hundred Men’s Competition 2026 scorecards/results",
                 "url": CRICBUZZ_TABLE,
                 "status": "error",
                 "error": str(e),
             }
+
+        if current:
+            try:
+                leader_rows, leader_url = parse_cricbuzz_most_wickets()
+
+                adil_current = next(
+                    (x for x in leader_rows if x["key"] == "arashid"),
+                    None,
+                )
+                if not adil_current or adil_current["wickets"] < 8:
+                    raise RuntimeError(
+                        f"Current tournament table has Adil Rashid="
+                        f"{adil_current['wickets'] if adil_current else 'missing'}; "
+                        "expected at least 8 wickets"
+                    )
+
+                season_bowling = merge_current_bowling(
+                    base["stats"],
+                    base["display_names"],
+                    current["scorecard_bowling"],
+                    leader_rows,
+                )
+
+                sources["current_bowling"] = {
+                    "name": "Cricbuzz – The Hundred Men’s Competition 2026 Most Wickets",
+                    "url": leader_url,
+                    "status": "ok",
+                    "last_success": refreshed,
+                    "detail": (
+                        f"{len(leader_rows)} tournament bowling leaders parsed; "
+                        f"{len(season_bowling)} current bowlers merged; "
+                        f"Adil Rashid current-season wickets={adil_current['wickets']}; "
+                        f"all-time after merge={base['stats'].get('arashid', {}).get('wickets', 0)}"
+                    ),
+                }
+            except Exception as e:
+                failures.append(f"current_bowling: {e}")
+                sources["current_bowling"] = {
+                    "name": "Cricbuzz – The Hundred Men’s Competition 2026 Most Wickets",
+                    "url": (
+                        CRICBUZZ_SERIES_STATS
+                        + "?seriesId=11493&seriesType=&statsType=mostWickets"
+                    ),
+                    "status": "error",
+                    "error": str(e),
+                }
 
     try:
         standings = cricbuzz_standings()
@@ -1081,7 +1312,7 @@ def main():
         "standings": standings,
         "analytics": analytics,
         "method": {
-            "career": "End-2025 Cricsheet Hundred men’s baseline + current 2026 The Hundred Men’s Cricbuzz scorecards, recomputed on refresh.",
+            "career": "End-2025 Cricsheet baseline + 2026 Cricbuzz batting scorecards + Cricbuzz tournament Most-Wickets aggregates, recomputed on refresh.",
             "team_h2h": "Completed 2021–2025 Cricsheet results + completed/currently published 2026 Cricbuzz results.",
             "player_h2h": "Delivery-level batter-v-bowler analysis from the local Cricsheet archive; freshness is shown separately.",
             "economy": "Bowling economy is shown as runs per 6 balls to align with conventional ESPN-style career economy.",
