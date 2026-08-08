@@ -824,6 +824,39 @@ def parse_squads(lines):
         squads[code] = names
     return squads
 
+def parse_scorecard_innings_codes(lines):
+    """
+    Cricbuzz scorecards expose innings labels such as:
+      MIL (1st Inn)
+      TRE (2nd Inn)
+
+    Use those labels to map every batter/bowler to the team they represented
+    in that match. This is much more reliable than depending only on the squad
+    block parser.
+    """
+    codes = []
+    pattern = re.compile(
+        r"^(TRE|MIL|WEF|MSG|SUL|SOU|LDN|BRM)\s*"
+        r"\((?:1st|2nd)\s+Inn\)$",
+        flags=re.I,
+    )
+    for token in lines:
+        m = pattern.fullmatch(str(token).strip())
+        if not m:
+            continue
+        code = m.group(1).upper()
+        if code not in codes:
+            codes.append(code)
+    return codes[:2]
+
+
+def opposing_team(code, a, b):
+    if code == a:
+        return b
+    if code == b:
+        return a
+    return None
+
 def aggregate_cricbuzz_2026(base):
     stats = base["stats"]
     display_names = base["display_names"]
@@ -834,6 +867,8 @@ def aggregate_cricbuzz_2026(base):
     team_form = defaultdict(list)
     player_recent = defaultdict(list)
     current_team = {}
+    team_membership = defaultdict(lambda: defaultdict(int))
+    team_last_seen = defaultdict(dict)
     current_match_summaries = []
     profile_refs = {}
 
@@ -857,31 +892,71 @@ def aggregate_cricbuzz_2026(base):
 
         meta = parse_match_meta(url, lines)
         squads = parse_squads(lines)
+        innings_codes = parse_scorecard_innings_codes(lines)
 
         match_seen = set()
+        match_team = {}
+
         for code, names in squads.items():
             for name in names:
                 key, _ = ensure(stats, display_names, name, prefer_name=True)
                 if key:
-                    current_team[key] = code
+                    match_team[key] = code
+                    team_membership[key][code] += 3
+                    if meta.get("date"):
+                        team_last_seen[key][code] = max(
+                            team_last_seen[key].get(code, ""),
+                            meta["date"],
+                        )
                     match_seen.add(key)
 
         match_player = defaultdict(dict)
 
-        for inn in batting:
+        for inn_idx, inn in enumerate(batting):
+            batting_team = (
+                innings_codes[inn_idx]
+                if inn_idx < len(innings_codes)
+                else None
+            )
             for r in inn:
                 key, _ = ensure(stats, display_names, r["name"], prefer_name=True)
                 if key:
                     match_seen.add(key)
                     match_player[key]["batting"] = dict(r)
+                    if batting_team:
+                        match_team[key] = batting_team
+                        team_membership[key][batting_team] += 5
+                        if meta.get("date"):
+                            team_last_seen[key][batting_team] = max(
+                                team_last_seen[key].get(batting_team, ""),
+                                meta["date"],
+                            )
             add_batting_innings(stats, display_names, inn, prefer_name=True)
 
-        for inn in bowling:
+        for inn_idx, inn in enumerate(bowling):
+            batting_team = (
+                innings_codes[inn_idx]
+                if inn_idx < len(innings_codes)
+                else None
+            )
+            bowling_team = opposing_team(
+                batting_team,
+                meta.get("a"),
+                meta.get("b"),
+            )
             for r in inn:
                 key, _ = ensure(stats, display_names, r["name"], prefer_name=True)
                 if key:
                     match_seen.add(key)
                     match_player[key]["bowling"] = dict(r)
+                    if bowling_team:
+                        match_team[key] = bowling_team
+                        team_membership[key][bowling_team] += 5
+                        if meta.get("date"):
+                            team_last_seen[key][bowling_team] = max(
+                                team_last_seen[key].get(bowling_team, ""),
+                                meta["date"],
+                            )
 
         # Career bowling is merged later from per-player tournament aggregates.
 
@@ -909,7 +984,7 @@ def aggregate_cricbuzz_2026(base):
                 })
 
         for key, rec in match_player.items():
-            code = current_team.get(key)
+            code = match_team.get(key)
             opp = None
             if code == meta["a"]:
                 opp = meta["b"]
@@ -926,6 +1001,35 @@ def aggregate_cricbuzz_2026(base):
 
         current_match_summaries.append(meta)
 
+    # Resolve each player's current 2026 franchise from all evidence collected
+    # across scorecards. Highest evidence count wins; latest appearance breaks
+    # ties. This prevents Player Lab / Matchup Lab from losing roster mappings
+    # when a single squad block fails to parse.
+    for key, counts in team_membership.items():
+        if not counts:
+            continue
+        current_team[key] = max(
+            counts,
+            key=lambda code: (
+                counts[code],
+                team_last_seen.get(key, {}).get(code, ""),
+            ),
+        )
+
+    team_rosters = {code: [] for code in TEAM_NAMES}
+    for key, code in current_team.items():
+        team_rosters.setdefault(code, []).append(key)
+
+    # Put the most frequently evidenced players first.
+    for code, keys in team_rosters.items():
+        keys.sort(
+            key=lambda key: (
+                team_membership.get(key, {}).get(code, 0),
+                team_last_seen.get(key, {}).get(code, ""),
+            ),
+            reverse=True,
+        )
+
     if parsed < 20:
         raise RuntimeError(f"Only {parsed} 2026 scorecards contained match data.")
 
@@ -941,6 +1045,11 @@ def aggregate_cricbuzz_2026(base):
         "team_form": team_form,
         "player_recent": player_recent,
         "current_team": current_team,
+        "team_rosters": team_rosters,
+        "team_membership": {
+            key: dict(counts)
+            for key, counts in team_membership.items()
+        },
         "match_summaries": current_match_summaries,
         "profile_refs": profile_refs,
     }
@@ -1064,6 +1173,7 @@ def build_analytics(base, current, batting, bowling):
         "phases": phases,
         "venues": venues,
         "players": list(players.values()),
+        "team_rosters": current.get("team_rosters", {}),
         "ball_by_ball_cutoff": base["latest_bbb_date"],
     }
 
