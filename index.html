@@ -47,7 +47,7 @@
 <footer class="foot">Team/career data refreshes from published 2026 scorecards. Delivery-level player H2H, phase and detailed venue analytics are only as fresh as the uploaded Cricsheet archive; that cutoff is always shown. “Analyst Edge” is decision support, not betting advice or a calibrated probability.</footer>
 </div>
 <script>
-let D=null;const $=s=>document.querySelector(s);const byCode={};const fmt=n=>n==null?'—':Number(n).toLocaleString(undefined,{maximumFractionDigits:2});
+let D=null;let selectedPlayerKey=null;const $=s=>document.querySelector(s);const byCode={};const fmt=n=>n==null?'—':Number(n).toLocaleString(undefined,{maximumFractionDigits:2});
 document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===b));document.querySelectorAll('.panel').forEach(x=>x.classList.toggle('on',x.id===b.dataset.tab))}));
 function ago(iso){if(!iso)return'never';const s=(Date.now()-new Date(iso))/1000;if(s<90)return Math.round(s)+' sec ago';if(s<5400)return Math.round(s/60)+' min ago';return Math.round(s/3600)+' hr ago'}
 function h2h(a,b){const x=[a,b].sort();const r=(D.analytics.team_h2h||[]).find(v=>v.a===x[0]&&v.b===x[1]);if(!r)return{games:0,aWins:0,bWins:0,ties:0,no_results:0};return{games:r.games,aWins:a===r.a?r.a_wins:r.b_wins,bWins:b===r.b?r.b_wins:r.a_wins,ties:r.ties,no_results:r.no_results}}
@@ -60,11 +60,166 @@ function renderMatch(){const a=$('#teamA').value,b=$('#teamB').value;if(a===b)re
 function renderPhases(a,b){const A=D.analytics.phases?.[a]||[],B=D.analytics.phases?.[b]||[];$('#phaseCutoff').textContent=`Ball-by-ball through ${D.analytics.ball_by_ball_cutoff||'unknown'}`;let h='';for(let i=0;i<4;i++){const av=A[i]?.runs_per_ball||0,bv=B[i]?.runs_per_ball||0,m=Math.max(av,bv,1.8);h+=`<div class="phase"><b>${A[i]?.phase||''}</b><div><div class="phaseTrack"><div class="phaseFill" style="width:${av/m*100}%"></div></div><div class="phaseTrack" style="margin-top:3px"><div class="phaseFill b" style="width:${bv/m*100}%"></div></div></div><span>${a} ${av.toFixed(2)}</span><span>${b} ${bv.toFixed(2)}</span></div>`}$('#phaseCompare').innerHTML=h||'<div class="empty">No phase data.</div>'}
 function renderVenue(a,b){const v=$('#venue').value;if(!v){$('#venueSignal').innerHTML='<div class="empty">Choose a venue to add venue-specific context.</div>';return}const x=D.analytics.venues.find(z=>z.venue===v);if(!x){$('#venueSignal').innerHTML='<div class="empty">No venue record.</div>';return}const ta=x.teams.find(t=>t.code===a),tb=x.teams.find(t=>t.code===b);$('#venueSignal').innerHTML=`<div class="stats"><div class="stat"><small>Matches</small><b>${x.matches}</b></div><div class="stat"><small>Avg 1st inns</small><b>${fmt(x.avg_first_innings)}</b></div><div class="stat"><small>${a} win %</small><b>${fmt(ta?.win_pct)}%</b></div><div class="stat"><small>${b} win %</small><b>${fmt(tb?.win_pct)}%</b></div></div><p class="desc">Chase wins ${x.chase_wins} · defend wins ${x.defend_wins}.</p>`}
 function renderKeyMatchups(a,b){const roster=new Map((D.analytics.players||[]).filter(p=>p.team===a||p.team===b).map(p=>[p.key,p.team]));const rows=(D.analytics.player_matchups||[]).filter(x=>{const bt=roster.get(x.batter_key),wt=roster.get(x.bowler_key);return (bt===a&&wt===b)||(bt===b&&wt===a)}).sort((x,y)=>y.balls-x.balls).slice(0,12);$('#bbbBadge').textContent=`BBB cutoff ${D.analytics.ball_by_ball_cutoff||'—'}`;$('#keyMatchups').innerHTML=rows.length?`<div class="table"><table><thead><tr><th>Batter</th><th>Bowler</th><th>Balls</th><th>Runs</th><th>Outs</th><th>SR</th><th>Dot%</th></tr></thead><tbody>${rows.map(x=>`<tr><td><b>${x.batter}</b></td><td>${x.bowler}</td><td>${x.balls}</td><td>${x.runs}</td><td>${x.dismissals}</td><td>${fmt(x.strike_rate)}</td><td>${fmt(x.dot_pct)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No sampled player matchup between the selected current rosters in the loaded ball-by-ball archive.</div>'}
-function renderPlayer(){const q=$('#playerSearch').value.trim().toLowerCase();let p=(D.analytics.players||[]).find(x=>x.player.toLowerCase()===q)||(D.analytics.players||[]).find(x=>x.player.toLowerCase().includes(q));if(!p){p=(D.analytics.players||[])[0]}if(!p)return;$('#playerSearch').value=p.player;$('#playerName').textContent=p.player;$('#playerTeam').textContent=p.team?byCode[p.team]:'No current-team mapping';const b=p.batting||{},w=p.bowling||{};$('#playerStats').innerHTML=`<div class="stat"><small>Career runs</small><b>${fmt(b.runs)}</b></div><div class="stat"><small>Bat SR</small><b>${fmt(b.strike_rate)}</b></div><div class="stat"><small>Career wickets</small><b>${fmt(w.wickets)}</b></div><div class="stat"><small>Economy</small><b>${fmt(w.economy)}</b></div>`;const r=(p.recent||[]).slice().reverse();$('#playerRecent').innerHTML=r.length?`<div class="table"><table><thead><tr><th>Date</th><th>Opp</th><th>Runs</th><th>Balls</th><th>Wkts</th><th>Runs conceded</th></tr></thead><tbody>${r.map(x=>`<tr><td>${x.date||'—'}</td><td>${x.opponent||'—'}</td><td>${x.batting?.runs??'—'}</td><td>${x.batting?.balls??'—'}</td><td>${x.bowling?.wickets??'—'}</td><td>${x.bowling?.runs??'—'}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No 2026 scorecard record loaded.</div>'}
+function findPlayerFromSearch(query){
+  const players=D?.analytics?.players||[];
+  const q=(query||'').trim().toLowerCase();
+  if(!q)return null;
+
+  // Exact name first.
+  let p=players.find(x=>x.player.toLowerCase()===q);
+  if(p)return p;
+
+  // Then a unique partial match. If several players match, do not guess.
+  const partial=players.filter(x=>x.player.toLowerCase().includes(q));
+  return partial.length===1?partial[0]:null;
+}
+
+function showPlayerProfile(p,{syncSearch=true}={}){
+  if(!p)return;
+  selectedPlayerKey=p.key;
+
+  // Do not overwrite text while the user is actively typing a new search.
+  if(syncSearch && document.activeElement!==$('#playerSearch')){
+    $('#playerSearch').value=p.player;
+  }
+
+  $('#playerName').textContent=p.player;
+  $('#playerTeam').textContent=p.team?byCode[p.team]:'No current-team mapping';
+
+  const b=p.batting||{},w=p.bowling||{};
+  $('#playerStats').innerHTML=
+    `<div class="stat"><small>Career runs</small><b>${fmt(b.runs)}</b></div>`+
+    `<div class="stat"><small>Bat SR</small><b>${fmt(b.strike_rate)}</b></div>`+
+    `<div class="stat"><small>Career wickets</small><b>${fmt(w.wickets)}</b></div>`+
+    `<div class="stat"><small>Economy</small><b>${fmt(w.economy)}</b></div>`;
+
+  const r=(p.recent||[]).slice().reverse();
+  $('#playerRecent').innerHTML=r.length
+    ?`<div class="table"><table><thead><tr><th>Date</th><th>Opp</th><th>Runs</th><th>Balls</th><th>Wkts</th><th>Runs conceded</th></tr></thead><tbody>${r.map(x=>`<tr><td>${x.date||'—'}</td><td>${x.opponent||'—'}</td><td>${x.batting?.runs??'—'}</td><td>${x.batting?.balls??'—'}</td><td>${x.bowling?.wickets??'—'}</td><td>${x.bowling?.runs??'—'}</td></tr>`).join('')}</tbody></table></div>`
+    :'<div class="empty">No 2026 scorecard record loaded.</div>';
+}
+
+function renderPlayer(){
+  const players=D?.analytics?.players||[];
+  if(!players.length)return;
+
+  // Keep the already selected profile across H2H changes and 60-second refreshes.
+  let p=selectedPlayerKey
+    ?players.find(x=>x.key===selectedPlayerKey)
+    :null;
+
+  // On first load prefer Philip Salt, then the first available player.
+  if(!p){
+    p=players.find(x=>x.key==='psalt')||players[0];
+    selectedPlayerKey=p.key;
+  }
+
+  showPlayerProfile(p,{syncSearch:true});
+}
+
+function commitPlayerSearch(){
+  const p=findPlayerFromSearch($('#playerSearch').value);
+  if(p){
+    showPlayerProfile(p,{syncSearch:true});
+    return;
+  }
+
+  // If the query is ambiguous/not found, leave the current profile untouched.
+  // This prevents a half-typed name from unexpectedly jumping elsewhere.
+}
+
 function renderPVH(){const b=$('#batterSelect').value,w=$('#bowlerSelect').value;const x=(D.analytics.player_matchups||[]).find(r=>r.batter_key===b&&r.bowler_key===w);$('#pvhCutoff').textContent=`Delivery data through ${D.analytics.ball_by_ball_cutoff||'—'}`;$('#pvh').innerHTML=x?`<div class="stats"><div class="stat"><small>Balls</small><b>${x.balls}</b></div><div class="stat"><small>Runs</small><b>${x.runs}</b></div><div class="stat"><small>Dismissals</small><b>${x.dismissals}</b></div><div class="stat"><small>Strike rate</small><b>${fmt(x.strike_rate)}</b></div><div class="stat"><small>Dot %</small><b>${fmt(x.dot_pct)}%</b></div><div class="stat"><small>4s</small><b>${x.fours}</b></div><div class="stat"><small>6s</small><b>${x.sixes}</b></div></div>`:'<div class="empty">No delivery-level matchup in the loaded archive.</div>'}
 function renderMatrix(){const codes=D.teams.map(x=>x.code);let h='<thead><tr><th>Row team</th>'+codes.map(c=>`<th>${c}</th>`).join('')+'</tr></thead><tbody>';for(const a of codes){h+=`<tr><th>${a}</th>`;for(const b of codes){if(a===b){h+='<td><div class="cell">—</div></td>';continue}const x=h2h(a,b),d=x.aWins+x.bWins,s=d?x.aWins/d:.5,cl=s>.55?'strong':s<.45?'weak':'even';h+=`<td><button class="cell ${cl}" data-a="${a}" data-b="${b}">${(s*100).toFixed(0)}%<br><small>n=${x.games}</small></button></td>`}h+='</tr>'}h+='</tbody>';$('#matrixTable').innerHTML=h;$('#matrixTable').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{$('#teamA').value=b.dataset.a;$('#teamB').value=b.dataset.b;renderMatch();document.querySelector('[data-tab="matchup"]').click()}))}
 function renderRecords(){const bq=$('#batSearch').value.toLowerCase(),wq=$('#bowlSearch').value.toLowerCase();$('#batRows').innerHTML=D.career_batting.filter(x=>!bq||x.player.toLowerCase().includes(bq)).slice(0,100).map(x=>`<tr><td>${x.rank}</td><td><b>${x.player}</b></td><td>${x.runs}</td><td>${x.matches}</td><td>${fmt(x.average)}</td><td>${fmt(x.strike_rate)}</td><td>${x.sixes}</td></tr>`).join('');$('#bowlRows').innerHTML=D.career_bowling.filter(x=>!wq||x.player.toLowerCase().includes(wq)).slice(0,100).map(x=>`<tr><td>${x.rank}</td><td><b>${x.player}</b></td><td>${x.wickets}</td><td>${x.matches}</td><td>${fmt(x.average)}</td><td>${fmt(x.economy)}</td><td>${fmt(x.strike_rate)}</td></tr>`).join('')}
-function render(){const ok=D.status?.overall==='ok';D.teams.forEach(t=>byCode[t.code]=t.name);$('#updated').textContent=new Date(D.generated_at_utc).toLocaleString()+' · '+ago(D.generated_at_utc);$('#healthDot').className='dot '+(ok?'ok':'bad');$('#healthText').textContent=ok?'Validated':'Stale / failed';$('#banner').innerHTML=ok?`<strong>Validated analyst snapshot.</strong> Career/team data current to the latest successful scorecard refresh; delivery-level H2H current through <strong>${D.analytics.ball_by_ball_cutoff||'unknown'}</strong>.`:`<strong>Warning:</strong> latest refresh failed; last-good dataset remains published.`;const opts=D.teams.map(t=>`<option value="${t.code}">${t.name}</option>`).join('');$('#teamA').innerHTML=opts;$('#teamB').innerHTML=opts;$('#teamA').value='MIL';$('#teamB').value='TRE';$('#venue').innerHTML='<option value="">All venues</option>'+D.analytics.venues.map(v=>`<option>${v.venue}</option>`).join('');const players=(D.analytics.players||[]).slice().sort((a,b)=>a.player.localeCompare(b.player));$('#playersList').innerHTML=players.map(p=>`<option value="${p.player}"></option>`).join('');const pOpts=players.map(p=>`<option value="${p.key}">${p.player}</option>`).join('');$('#batterSelect').innerHTML=pOpts;$('#bowlerSelect').innerHTML=pOpts;$('#playerSearch').value=players[0]?.player||'';$('#batterSelect').value='psalt';$('#bowlerSelect').value='arashid';renderMatch();renderPlayer();renderPVH();renderMatrix();renderRecords();$('#standings').innerHTML=D.standings.map(x=>`<tr><td>${x.rank}</td><td><span class="tag">${x.code}</span> ${x.team}</td><td>${x.p}</td><td>${x.w}</td><td>${x.l}</td><td>${x.nr}</td><td><b>${x.pts}</b></td><td class="${x.nrr>=0?'pos':'neg'}">${x.nrr>=0?'+':''}${fmt(x.nrr)}</td></tr>`).join('');$('#sources').innerHTML=Object.values(D.sources||{}).map(s=>`<div class="source"><div class="health"><span class="dot ${s.status==='ok'?'ok':'bad'}"></span><b>${s.name}</b></div><p>${s.detail||s.error||''}<br>${s.url||''}</p></div>`).join('');$('#coverage').innerHTML=Object.entries(D.method||{}).map(([k,v])=>`<div class="source"><b>${k}</b><p>${v}</p></div>`).join('')}
-$('#teamA').addEventListener('change',renderMatch);$('#teamB').addEventListener('change',renderMatch);$('#venue').addEventListener('change',()=>renderVenue($('#teamA').value,$('#teamB').value));$('#playerSearch').addEventListener('change',renderPlayer);$('#batterSelect').addEventListener('change',renderPVH);$('#bowlerSelect').addEventListener('change',renderPVH);$('#batSearch').addEventListener('input',renderRecords);$('#bowlSearch').addEventListener('input',renderRecords);
+function render(){
+  const ok=D.status?.overall==='ok';
+  D.teams.forEach(t=>byCode[t.code]=t.name);
+
+  // Capture current UI state BEFORE rebuilding select options.
+  const prev={
+    teamA:$('#teamA').value,
+    teamB:$('#teamB').value,
+    venue:$('#venue').value,
+    batter:$('#batterSelect').value,
+    bowler:$('#bowlerSelect').value,
+    searchText:$('#playerSearch').value
+  };
+
+  $('#updated').textContent=new Date(D.generated_at_utc).toLocaleString()+' · '+ago(D.generated_at_utc);
+  $('#healthDot').className='dot '+(ok?'ok':'bad');
+  $('#healthText').textContent=ok?'Validated':'Stale / failed';
+  $('#banner').innerHTML=ok
+    ?`<strong>Validated analyst snapshot.</strong> Career/team data current to the latest successful scorecard refresh; delivery-level H2H current through <strong>${D.analytics.ball_by_ball_cutoff||'unknown'}</strong>.`
+    :`<strong>Warning:</strong> latest refresh failed; last-good dataset remains published.`;
+
+  const opts=D.teams.map(t=>`<option value="${t.code}">${t.name}</option>`).join('');
+  $('#teamA').innerHTML=opts;
+  $('#teamB').innerHTML=opts;
+
+  const validTeam=c=>D.teams.some(t=>t.code===c);
+  $('#teamA').value=validTeam(prev.teamA)?prev.teamA:'MIL';
+  $('#teamB').value=validTeam(prev.teamB)&&prev.teamB!==$('#teamA').value
+    ?prev.teamB
+    :'TRE';
+
+  $('#venue').innerHTML='<option value="">All venues</option>'+
+    D.analytics.venues.map(v=>`<option>${v.venue}</option>`).join('');
+  if(prev.venue && D.analytics.venues.some(v=>v.venue===prev.venue)){
+    $('#venue').value=prev.venue;
+  }
+
+  const players=(D.analytics.players||[]).slice().sort((a,b)=>a.player.localeCompare(b.player));
+  $('#playersList').innerHTML=players.map(p=>`<option value="${p.player}"></option>`).join('');
+
+  const pOpts=players.map(p=>`<option value="${p.key}">${p.player}</option>`).join('');
+  $('#batterSelect').innerHTML=pOpts;
+  $('#bowlerSelect').innerHTML=pOpts;
+
+  const hasPlayerKey=k=>players.some(p=>p.key===k);
+  $('#batterSelect').value=hasPlayerKey(prev.batter)?prev.batter:(hasPlayerKey('psalt')?'psalt':players[0]?.key||'');
+  $('#bowlerSelect').value=hasPlayerKey(prev.bowler)?prev.bowler:(hasPlayerKey('arashid')?'arashid':players[0]?.key||'');
+
+  // Preserve Player Search independently from H2H selectors.
+  if(selectedPlayerKey && hasPlayerKey(selectedPlayerKey)){
+    const p=players.find(x=>x.key===selectedPlayerKey);
+    if(document.activeElement!==$('#playerSearch')){
+      $('#playerSearch').value=p.player;
+    }
+  }else{
+    const existing=findPlayerFromSearch(prev.searchText);
+    const defaultPlayer=existing||players.find(x=>x.key==='psalt')||players[0];
+    if(defaultPlayer){
+      selectedPlayerKey=defaultPlayer.key;
+      if(document.activeElement!==$('#playerSearch')){
+        $('#playerSearch').value=defaultPlayer.player;
+      }
+    }
+  }
+
+  renderMatch();
+  renderPlayer();
+  renderPVH();
+  renderMatrix();
+  renderRecords();
+
+  $('#standings').innerHTML=D.standings.map(x=>`<tr><td>${x.rank}</td><td><span class="tag">${x.code}</span> ${x.team}</td><td>${x.p}</td><td>${x.w}</td><td>${x.l}</td><td>${x.nr}</td><td><b>${x.pts}</b></td><td class="${x.nrr>=0?'pos':'neg'}">${x.nrr>=0?'+':''}${fmt(x.nrr)}</td></tr>`).join('');
+  $('#sources').innerHTML=Object.values(D.sources||{}).map(s=>`<div class="source"><div class="health"><span class="dot ${s.status==='ok'?'ok':'bad'}"></span><b>${s.name}</b></div><p>${s.detail||s.error||''}<br>${s.url||''}</p></div>`).join('');
+  $('#coverage').innerHTML=Object.entries(D.method||{}).map(([k,v])=>`<div class="source"><b>${k}</b><p>${v}</p></div>`).join('');
+}
+$('#teamA').addEventListener('change',renderMatch);$('#teamB').addEventListener('change',renderMatch);$('#venue').addEventListener('change',()=>renderVenue($('#teamA').value,$('#teamB').value));$('#playerSearch').addEventListener('change',commitPlayerSearch);
+$('#playerSearch').addEventListener('keydown',e=>{
+  if(e.key==='Enter'){
+    e.preventDefault();
+    commitPlayerSearch();
+    $('#playerSearch').blur();
+  }
+});
+$('#playerSearch').addEventListener('input',()=>{
+  // Selecting an exact datalist suggestion should update immediately.
+  const p=findPlayerFromSearch($('#playerSearch').value);
+  if(p && p.player.toLowerCase()===$('#playerSearch').value.trim().toLowerCase()){
+    showPlayerProfile(p,{syncSearch:false});
+  }
+});$('#batterSelect').addEventListener('change',renderPVH);$('#bowlerSelect').addEventListener('change',renderPVH);$('#batSearch').addEventListener('input',renderRecords);$('#bowlSearch').addEventListener('input',renderRecords);
 async function load(){try{const r=await fetch('data/current.json?t='+Date.now(),{cache:'no-store'});if(!r.ok)throw Error(r.status);D=await r.json();render()}catch(e){$('#banner').innerHTML='<strong>Could not load analyst data.</strong> Check the latest GitHub Action.'}}load();setInterval(load,60000);
 </script></body></html>
