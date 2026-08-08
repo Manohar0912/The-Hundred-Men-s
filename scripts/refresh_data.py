@@ -741,24 +741,57 @@ def parse_url_codes(url):
     return (a if a in TEAM_NAMES else None), (b if b in TEAM_NAMES else None)
 
 def parse_match_meta(url, lines):
-    a, b = parse_url_codes(url)
+    """
+    Parse match result/date/venue directly from the current Hundred scorecard.
 
-    result_line = next(
-        (
-            x for x in lines[:180]
-            if " won by " in x.lower()
-            or x.lower() in {"match tied", "no result", "match abandoned"}
-        ),
-        "",
-    )
-    winner = None
+    Cricbuzz scorecards expose, near the top:
+      Trent Rockets won by 7 wkts
+    and in INFO:
+      Date
+      Wednesday, August 5
+      Venue
+      Trent Bridge, Nottingham
+
+    We search the full scorecard text rather than a fixed first-N-token window.
+    """
+    a, b = parse_url_codes(url)
+    text = " ".join(str(x) for x in lines)
+
+    result_line = ""
+
+    # Prefer an exact team-name result because it identifies the winner.
     for code, name in TEAM_NAMES.items():
-        if result_line.lower().startswith(name.lower()):
+        m = re.search(
+            rf"\b{re.escape(name)}\s+won by\s+"
+            rf"([^|•]+?)(?=(?:\s+[A-Z]{{2,4}}\s*(?:\(|\d))|\s+Batter\b|\s+INFO\b|$)",
+            text,
+            flags=re.I,
+        )
+        if m:
+            result_line = f"{name} won by {m.group(1).strip()}"
+            break
+
+    # Fallback to individual stripped strings, which is the common layout.
+    if not result_line:
+        result_line = next(
+            (
+                x for x in lines
+                if " won by " in str(x).lower()
+                or str(x).lower() in {
+                    "match tied", "no result", "match abandoned"
+                }
+            ),
+            "",
+        )
+
+    winner = None
+    low = str(result_line).lower().strip()
+    for code, name in TEAM_NAMES.items():
+        if low.startswith(name.lower() + " won by"):
             winner = code
             break
 
     result_type = None
-    low = result_line.lower()
     if "tied" in low:
         result_type = "tie"
     elif "no result" in low or "abandoned" in low:
@@ -766,40 +799,69 @@ def parse_match_meta(url, lines):
 
     venue = None
     for i, x in enumerate(lines):
-        if x == "Venue" and i + 1 < len(lines):
-            venue = lines[i+1]
+        token = str(x).strip()
+        if token.rstrip(":") == "Venue" and i + 1 < len(lines):
+            venue = str(lines[i + 1]).strip()
             break
-    if not venue:
-        # Top-of-page token can appear as "Venue:".
-        for i, x in enumerate(lines[:160]):
-            if x.rstrip(":") == "Venue" and i + 1 < len(lines):
-                venue = lines[i+1]
+        if token.startswith("Venue:"):
+            venue = token.split(":", 1)[1].strip() or None
+            if venue:
                 break
 
     date = None
+    # INFO layout: Date -> Wednesday, August 5
     for i, x in enumerate(lines):
-        if x == "Date" and i + 1 < len(lines):
-            raw = lines[i+1]
+        token = str(x).strip()
+        if token.rstrip(":") == "Date" and i + 1 < len(lines):
+            raw = str(lines[i + 1]).strip()
+            for fmt in ("%A, %B %d %Y", "%A, %B %d"):
+                try:
+                    candidate = raw if "%Y" in fmt else raw + " 2026"
+                    date = datetime.strptime(candidate, fmt).date().isoformat()
+                    break
+                except Exception:
+                    pass
+            if date:
+                break
+
+    # Top page fallback: "Date & Time: Wednesday, August 5, 6:30 PM LOCAL"
+    if not date:
+        m = re.search(
+            r"Date\s*&\s*Time:\s*(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s*"
+            r"(July|August)\s+(\d{1,2})",
+            text,
+            flags=re.I,
+        )
+        if m:
             try:
-                date = datetime.strptime(raw + " 2026", "%A, %B %d %Y").date().isoformat()
+                date = datetime.strptime(
+                    f"{m.group(1)} {m.group(2)} 2026", "%B %d %Y"
+                ).date().isoformat()
             except Exception:
                 pass
-            break
 
     scores = {}
     for i, x in enumerate(lines[:-1]):
-        if x in TEAM_NAMES and re.match(r"^\d+(?:-\d+)?\s*\(\d+", lines[i+1]):
-            m = re.match(r"^(\d+)(?:-(\d+))?\s*\((\d+)", lines[i+1])
+        token = str(x).strip()
+        if token in TEAM_NAMES:
+            score_token = str(lines[i + 1]).strip()
+            m = re.match(r"^(\d+)(?:[-/](\d+))?\s*\((\d+)", score_token)
             if m:
-                scores[x] = {
+                scores[token] = {
                     "runs": int(m.group(1)),
                     "wickets": int(m.group(2) or 10),
                     "balls": int(m.group(3)),
                 }
 
     return {
-        "a": a, "b": b, "winner": winner, "result_type": result_type,
-        "result": result_line, "venue": venue, "date": date, "scores": scores,
+        "a": a,
+        "b": b,
+        "winner": winner,
+        "result_type": result_type,
+        "result": result_line,
+        "venue": venue,
+        "date": date,
+        "scores": scores,
     }
 
 def parse_squads(lines):
@@ -1470,41 +1532,54 @@ def main():
 
     try:
         standings = cricbuzz_standings()
-        table_form = cricbuzz_recent_form()
 
-        # Validate recent-form coverage against matches played.
+        scorecard_form = current.get("team_form", {}) if current else {}
+
+        # Validate recent-form coverage against matches played in the standings.
+        # The UI only needs the latest five, so require min(P, 5).
         form_issues = []
         for row in standings:
             code = row["code"]
             played = int(row["p"])
-            actual = len(table_form.get(code, []))
-
-            # The UI displays last five. If a team has played >=5, require at
-            # least five completed results. Earlier in a season, require all
-            # matches played.
+            actual = len(scorecard_form.get(code, []))
             required = min(played, 5)
+
             if actual < required:
                 form_issues.append(
-                    f"{code}: {actual} results parsed, expected at least {required}"
+                    f"{code}: {actual} completed scorecard results parsed, "
+                    f"expected at least {required}"
                 )
 
         if form_issues:
+            # Include parsed match summaries to make any future source change
+            # diagnosable in one log rather than another blind parser patch.
+            parsed_results = [
+                {
+                    "a": x.get("a"),
+                    "b": x.get("b"),
+                    "winner": x.get("winner"),
+                    "result_type": x.get("result_type"),
+                    "date": x.get("date"),
+                    "result": x.get("result"),
+                }
+                for x in (current.get("match_summaries", []) if current else [])
+                if x.get("winner") or x.get("result_type")
+            ]
             raise RuntimeError(
-                "recent-form coverage incomplete: " + "; ".join(form_issues)
+                "recent-form coverage incomplete: "
+                + "; ".join(form_issues)
+                + f"; completed match metadata parsed={len(parsed_results)}"
             )
 
-        if current:
-            current["team_form"] = table_form
-
         sources["standings"] = {
-            "name": "Cricbuzz – 2026 points table + recent form",
+            "name": "Cricbuzz – 2026 points table",
             "url": CRICBUZZ_TABLE,
             "status": "ok",
             "last_success": refreshed,
             "detail": (
-                "8 standings rows; recent-form results parsed: "
+                "8 standings rows; recent form from completed scorecards: "
                 + ", ".join(
-                    f"{code}={len(table_form.get(code, []))}"
+                    f"{code}={len(scorecard_form.get(code, []))}"
                     for code in TEAM_NAMES
                 )
             ),
@@ -1513,7 +1588,7 @@ def main():
         standings = []
         failures.append(f"standings/form: {e}")
         sources["standings"] = {
-            "name": "Cricbuzz – 2026 points table + recent form",
+            "name": "Cricbuzz – 2026 points table",
             "url": CRICBUZZ_TABLE,
             "status": "error",
             "error": str(e),
