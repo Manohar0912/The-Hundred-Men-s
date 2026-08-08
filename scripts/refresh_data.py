@@ -1177,6 +1177,131 @@ def build_analytics(base, current, batting, bowling):
         "ball_by_ball_cutoff": base["latest_bbb_date"],
     }
 
+def cricbuzz_recent_form():
+    """
+    Parse each team's completed 2026 results directly from the Cricbuzz
+    points-table opposition history.
+
+    The points table publishes, for every team:
+        Opposition | Date | Result | NRR Change
+
+    Example:
+        TRE
+        Jul 24
+        Lost by 10 runs
+        -1.000
+
+    This is more reliable for recent form than inferring results separately
+    from every scorecard page.
+    """
+    html = get(CRICBUZZ_TABLE).text
+    soup = BeautifulSoup(html, "html.parser")
+    tokens = [
+        re.sub(r"\s+", " ", x).strip()
+        for x in soup.stripped_strings
+        if str(x).strip()
+    ]
+
+    team_code_re = re.compile(
+        r"^(TRE|MIL|WEF|MSG|SUL|SOU|LDN|BRM)(?:\s*\([A-Z]+\))?$"
+    )
+    opponent_code_re = re.compile(r"^(TRE|MIL|WEF|MSG|SUL|SOU|LDN|BRM)$")
+    date_re = re.compile(r"^(Jul|Aug)\s+\d{2}$", flags=re.I)
+
+    # Identify each standings team's Opposition block.
+    blocks = []
+    for i, tok in enumerate(tokens):
+        if tok != "Opposition":
+            continue
+
+        window = tokens[max(0, i - 18):i]
+        code = None
+        for candidate in reversed(window):
+            m = team_code_re.fullmatch(candidate)
+            if m:
+                code = m.group(1)
+                break
+
+        if code:
+            blocks.append((i, code))
+
+    if len(blocks) < 8:
+        raise RuntimeError(
+            f"Recent-form parser found only {len(blocks)} team opposition blocks"
+        )
+
+    form = {code: [] for code in TEAM_NAMES}
+
+    for block_index, (opp_i, team_code_) in enumerate(blocks):
+        end = blocks[block_index + 1][0] if block_index + 1 < len(blocks) else len(tokens)
+        segment = tokens[opp_i + 1:end]
+
+        # Scan for the repeated pattern:
+        # opponent code -> date -> result -> NRR change
+        for j in range(len(segment) - 2):
+            opp_token = segment[j]
+            if not opponent_code_re.fullmatch(opp_token):
+                continue
+
+            date_token = segment[j + 1]
+            result_token = segment[j + 2]
+
+            if not date_re.fullmatch(date_token):
+                continue
+
+            result_lower = result_token.lower()
+
+            # Future/current fixtures are shown as "-".
+            if result_token == "-":
+                continue
+
+            if result_lower.startswith("won"):
+                outcome = "W"
+            elif result_lower.startswith("lost"):
+                outcome = "L"
+            elif "tied" in result_lower:
+                outcome = "T"
+            elif (
+                "no result" in result_lower
+                or "abandon" in result_lower
+                or "cancel" in result_lower
+            ):
+                outcome = "NR"
+            else:
+                # Ignore anything that is not a published completed result.
+                continue
+
+            try:
+                date_iso = datetime.strptime(
+                    f"{date_token} 2026", "%b %d %Y"
+                ).date().isoformat()
+            except Exception:
+                date_iso = None
+
+            form[team_code_].append({
+                "date": date_iso,
+                "opponent": opp_token,
+                "result": outcome,
+                "venue": None,
+                "match_result": result_token,
+                "source": "points-table",
+            })
+
+    # Sort chronologically and remove accidental duplicates.
+    cleaned = {}
+    for code, rows in form.items():
+        seen = set()
+        unique = []
+        for row in sorted(rows, key=lambda x: x.get("date") or ""):
+            sig = (row.get("date"), row.get("opponent"), row.get("result"))
+            if sig in seen:
+                continue
+            seen.add(sig)
+            unique.append(row)
+        cleaned[code] = unique
+
+    return cleaned
+
 def cricbuzz_standings():
     html = get(CRICBUZZ_TABLE).text
     soup = BeautifulSoup(html, "html.parser")
@@ -1345,17 +1470,50 @@ def main():
 
     try:
         standings = cricbuzz_standings()
+        table_form = cricbuzz_recent_form()
+
+        # Validate recent-form coverage against matches played.
+        form_issues = []
+        for row in standings:
+            code = row["code"]
+            played = int(row["p"])
+            actual = len(table_form.get(code, []))
+
+            # The UI displays last five. If a team has played >=5, require at
+            # least five completed results. Earlier in a season, require all
+            # matches played.
+            required = min(played, 5)
+            if actual < required:
+                form_issues.append(
+                    f"{code}: {actual} results parsed, expected at least {required}"
+                )
+
+        if form_issues:
+            raise RuntimeError(
+                "recent-form coverage incomplete: " + "; ".join(form_issues)
+            )
+
+        if current:
+            current["team_form"] = table_form
+
         sources["standings"] = {
-            "name": "Cricbuzz – 2026 points table",
+            "name": "Cricbuzz – 2026 points table + recent form",
             "url": CRICBUZZ_TABLE,
             "status": "ok",
             "last_success": refreshed,
+            "detail": (
+                "8 standings rows; recent-form results parsed: "
+                + ", ".join(
+                    f"{code}={len(table_form.get(code, []))}"
+                    for code in TEAM_NAMES
+                )
+            ),
         }
     except Exception as e:
         standings = []
-        failures.append(f"standings: {e}")
+        failures.append(f"standings/form: {e}")
         sources["standings"] = {
-            "name": "Cricbuzz – 2026 points table",
+            "name": "Cricbuzz – 2026 points table + recent form",
             "url": CRICBUZZ_TABLE,
             "status": "error",
             "error": str(e),
@@ -1388,6 +1546,16 @@ def main():
         if len(analytics.get("player_matchups", [])) < 100:
             failures.append(
                 f"validation: only {len(analytics.get('player_matchups', []))} player matchups"
+            )
+
+        missing_form = [
+            code for code in TEAM_NAMES
+            if len(analytics.get("team_form", {}).get(code, [])) < 5
+        ]
+        if missing_form:
+            failures.append(
+                "validation: recent form missing/short for "
+                + ", ".join(missing_form)
             )
 
     data = {
