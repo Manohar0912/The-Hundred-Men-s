@@ -58,8 +58,116 @@ function edge(a,b){const h=h2h(a,b),dec=h.aWins+h.bWins,hs=dec?h.aWins/dec:.5,pa
 function formHtml(code){const f=(D.analytics.team_form?.[code]||[]).slice(-5);return `<div><b>${byCode[code]}</b><div class="form">${f.map(x=>`<span class="${x.result}">${x.result}</span>`).join('')||'<span>—</span>'}</div></div>`}
 function renderMatch(){const a=$('#teamA').value,b=$('#teamB').value;if(a===b)return;const e=edge(a,b),lean=e.score>=50?a:b,ls=e.score>=50?e.score:100-e.score;$('#lean').textContent=`Lean: ${byCode[lean]} · ${ls.toFixed(0)}/100 index`;$('#needle').style.left=Math.max(2,Math.min(98,e.score))+'%';$('#edgeA').textContent=byCode[a];$('#edgeB').textContent=byCode[b];const ar=D.standings.find(x=>x.code===a),br=D.standings.find(x=>x.code===b);$('#matchKpis').innerHTML=`<div class="kpi"><small>H2H</small><b>${e.h.aWins}-${e.h.bWins}</b><span>${e.h.games} games</span></div><div class="kpi"><small>${a} points</small><b>${ar?.pts??'—'}</b><span>NRR ${ar?.nrr>=0?'+':''}${fmt(ar?.nrr)}</span></div><div class="kpi"><small>${b} points</small><b>${br?.pts??'—'}</b><span>NRR ${br?.nrr>=0?'+':''}${fmt(br?.nrr)}</span></div><div class="kpi"><small>${a} last 5</small><b>${(recentRate(a)*100).toFixed(0)}%</b><span>win-equivalent rate</span></div><div class="kpi"><small>${b} last 5</small><b>${(recentRate(b)*100).toFixed(0)}%</b><span>win-equivalent rate</span></div>`;$('#components').innerHTML=[['H2H',e.hs,40],['2026 points',e.ps,30],['NRR',e.n,15],['Recent form',e.rs,15]].map(x=>`<div class="comp"><span>${x[0]} · ${x[2]}%</span><div class="track"><div class="fill" style="width:${x[1]*100}%"></div></div><b>${(x[1]*100).toFixed(0)}%</b></div>`).join('');$('#forms').innerHTML=formHtml(a)+'<div style="height:12px"></div>'+formHtml(b);renderPhases(a,b);renderVenue(a,b);renderKeyMatchups(a,b)}
 function renderPhases(a,b){const A=D.analytics.phases?.[a]||[],B=D.analytics.phases?.[b]||[];$('#phaseCutoff').textContent=`Ball-by-ball through ${D.analytics.ball_by_ball_cutoff||'unknown'}`;let h='';for(let i=0;i<4;i++){const av=A[i]?.runs_per_ball||0,bv=B[i]?.runs_per_ball||0,m=Math.max(av,bv,1.8);h+=`<div class="phase"><b>${A[i]?.phase||''}</b><div><div class="phaseTrack"><div class="phaseFill" style="width:${av/m*100}%"></div></div><div class="phaseTrack" style="margin-top:3px"><div class="phaseFill b" style="width:${bv/m*100}%"></div></div></div><span>${a} ${av.toFixed(2)}</span><span>${b} ${bv.toFixed(2)}</span></div>`}$('#phaseCompare').innerHTML=h||'<div class="empty">No phase data.</div>'}
-function renderVenue(a,b){const v=$('#venue').value;if(!v){$('#venueSignal').innerHTML='<div class="empty">Choose a venue to add venue-specific context.</div>';return}const x=D.analytics.venues.find(z=>z.venue===v);if(!x){$('#venueSignal').innerHTML='<div class="empty">No venue record.</div>';return}const ta=x.teams.find(t=>t.code===a),tb=x.teams.find(t=>t.code===b);$('#venueSignal').innerHTML=`<div class="stats"><div class="stat"><small>Matches</small><b>${x.matches}</b></div><div class="stat"><small>Avg 1st inns</small><b>${fmt(x.avg_first_innings)}</b></div><div class="stat"><small>${a} win %</small><b>${fmt(ta?.win_pct)}%</b></div><div class="stat"><small>${b} win %</small><b>${fmt(tb?.win_pct)}%</b></div></div><p class="desc">Chase wins ${x.chase_wins} · defend wins ${x.defend_wins}.</p>`}
-function renderKeyMatchups(a,b){const roster=new Map((D.analytics.players||[]).filter(p=>p.team===a||p.team===b).map(p=>[p.key,p.team]));const rows=(D.analytics.player_matchups||[]).filter(x=>{const bt=roster.get(x.batter_key),wt=roster.get(x.bowler_key);return (bt===a&&wt===b)||(bt===b&&wt===a)}).sort((x,y)=>y.balls-x.balls).slice(0,12);$('#bbbBadge').textContent=`BBB cutoff ${D.analytics.ball_by_ball_cutoff||'—'}`;$('#keyMatchups').innerHTML=rows.length?`<div class="table"><table><thead><tr><th>Batter</th><th>Bowler</th><th>Balls</th><th>Runs</th><th>Outs</th><th>SR</th><th>Dot%</th></tr></thead><tbody>${rows.map(x=>`<tr><td><b>${x.batter}</b></td><td>${x.bowler}</td><td>${x.balls}</td><td>${x.runs}</td><td>${x.dismissals}</td><td>${fmt(x.strike_rate)}</td><td>${fmt(x.dot_pct)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No sampled player matchup between the selected current rosters in the loaded ball-by-ball archive.</div>'}
+function bestAutoVenue(a,b){
+  const venues=D.analytics.venues||[];
+  const both=venues.map(v=>{
+    const ta=v.teams.find(t=>t.code===a),tb=v.teams.find(t=>t.code===b);
+    return {v,ta,tb,score:(ta?.matches||0)+(tb?.matches||0)};
+  }).filter(x=>x.ta&&x.tb);
+
+  if(both.length){
+    both.sort((x,y)=>y.score-x.score||y.v.matches-x.v.matches);
+    return both[0].v;
+  }
+
+  const one=venues.map(v=>{
+    const ta=v.teams.find(t=>t.code===a),tb=v.teams.find(t=>t.code===b);
+    return {v,score:(ta?.matches||0)+(tb?.matches||0)};
+  }).filter(x=>x.score>0);
+
+  one.sort((x,y)=>y.score-x.score||y.v.matches-x.v.matches);
+  return one[0]?.v||null;
+}
+
+function renderVenue(a,b){
+  const selected=$('#venue').value;
+  let x=selected
+    ?D.analytics.venues.find(z=>z.venue===selected)
+    :bestAutoVenue(a,b);
+
+  if(!x){
+    $('#venueSignal').innerHTML='<div class="empty">No venue record available for these teams.</div>';
+    return;
+  }
+
+  const ta=x.teams.find(t=>t.code===a),tb=x.teams.find(t=>t.code===b);
+  const auto=!selected;
+  $('#venueSignal').innerHTML=
+    `<div class="badge" style="margin-bottom:8px">${auto?'Auto context':'Selected venue'} · ${x.venue}</div>`+
+    `<div class="stats">`+
+      `<div class="stat"><small>Matches</small><b>${x.matches}</b></div>`+
+      `<div class="stat"><small>Avg 1st inns</small><b>${fmt(x.avg_first_innings)}</b></div>`+
+      `<div class="stat"><small>${a} win %</small><b>${ta?.win_pct==null?'—':fmt(ta.win_pct)+'%'}</b></div>`+
+      `<div class="stat"><small>${b} win %</small><b>${tb?.win_pct==null?'—':fmt(tb.win_pct)+'%'}</b></div>`+
+    `</div>`+
+    `<p class="desc">Chase wins ${x.chase_wins} · defend wins ${x.defend_wins}. `+
+    `${auto?'Choose a venue above to override this automatically selected historical context.':''}</p>`;
+}
+
+function rosterKeys(code){
+  const explicit=D.analytics.team_rosters?.[code]||[];
+  if(explicit.length)return new Set(explicit);
+
+  // Backward-compatible fallback for an older current.json during the first
+  // deployment after this patch.
+  return new Set(
+    (D.analytics.players||[])
+      .filter(p=>p.team===code)
+      .map(p=>p.key)
+  );
+}
+
+function renderKeyMatchups(a,b){
+  const rosterA=rosterKeys(a),rosterB=rosterKeys(b);
+  let rows=(D.analytics.player_matchups||[]).filter(x=>
+    (rosterA.has(x.batter_key)&&rosterB.has(x.bowler_key))||
+    (rosterB.has(x.batter_key)&&rosterA.has(x.bowler_key))
+  );
+
+  rows.sort((x,y)=>
+    y.balls-x.balls||
+    y.dismissals-x.dismissals||
+    y.runs-x.runs
+  );
+  rows=rows.slice(0,12);
+
+  $('#bbbBadge').textContent=`BBB cutoff ${D.analytics.ball_by_ball_cutoff||'—'}`;
+
+  if(rows.length){
+    $('#keyMatchups').innerHTML=
+      `<div class="table"><table><thead><tr>`+
+      `<th>Batter</th><th>Bowler</th><th>Balls</th><th>Runs</th><th>Outs</th><th>SR</th><th>Dot%</th>`+
+      `</tr></thead><tbody>`+
+      rows.map(x=>`<tr><td><b>${x.batter}</b></td><td>${x.bowler}</td><td>${x.balls}</td><td>${x.runs}</td><td>${x.dismissals}</td><td>${fmt(x.strike_rate)}</td><td>${fmt(x.dot_pct)}</td></tr>`).join('')+
+      `</tbody></table></div>`;
+    return;
+  }
+
+  // If there genuinely is no direct current-roster H2H sample, show the
+  // strongest relevant historical evidence involving one of the two rosters
+  // rather than an unexplained blank state.
+  const related=(D.analytics.player_matchups||[])
+    .filter(x=>
+      rosterA.has(x.batter_key)||rosterA.has(x.bowler_key)||
+      rosterB.has(x.batter_key)||rosterB.has(x.bowler_key)
+    )
+    .sort((x,y)=>y.balls-x.balls)
+    .slice(0,8);
+
+  if(related.length){
+    $('#keyMatchups').innerHTML=
+      `<div class="banner" style="margin:0 0 8px"><strong>No direct current-roster sample.</strong> Showing the largest historical player-matchup samples involving players from ${a}/${b} instead.</div>`+
+      `<div class="table"><table><thead><tr>`+
+      `<th>Batter</th><th>Bowler</th><th>Balls</th><th>Runs</th><th>Outs</th><th>SR</th><th>Dot%</th>`+
+      `</tr></thead><tbody>`+
+      related.map(x=>`<tr><td><b>${x.batter}</b></td><td>${x.bowler}</td><td>${x.balls}</td><td>${x.runs}</td><td>${x.dismissals}</td><td>${fmt(x.strike_rate)}</td><td>${fmt(x.dot_pct)}</td></tr>`).join('')+
+      `</tbody></table></div>`;
+  }else{
+    $('#keyMatchups').innerHTML='<div class="empty">No delivery-level player matchup sample is available for these teams in the loaded archive.</div>';
+  }
+}
+
+function renderPlayer(a,b){const roster=new Map((D.analytics.players||[]).filter(p=>p.team===a||p.team===b).map(p=>[p.key,p.team]));const rows=(D.analytics.player_matchups||[]).filter(x=>{const bt=roster.get(x.batter_key),wt=roster.get(x.bowler_key);return (bt===a&&wt===b)||(bt===b&&wt===a)}).sort((x,y)=>y.balls-x.balls).slice(0,12);$('#bbbBadge').textContent=`BBB cutoff ${D.analytics.ball_by_ball_cutoff||'—'}`;$('#keyMatchups').innerHTML=rows.length?`<div class="table"><table><thead><tr><th>Batter</th><th>Bowler</th><th>Balls</th><th>Runs</th><th>Outs</th><th>SR</th><th>Dot%</th></tr></thead><tbody>${rows.map(x=>`<tr><td><b>${x.batter}</b></td><td>${x.bowler}</td><td>${x.balls}</td><td>${x.runs}</td><td>${x.dismissals}</td><td>${fmt(x.strike_rate)}</td><td>${fmt(x.dot_pct)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No sampled player matchup between the selected current rosters in the loaded ball-by-ball archive.</div>'}
 function findPlayerFromSearch(query){
   const players=D?.analytics?.players||[];
   const q=(query||'').trim().toLowerCase();
@@ -162,7 +270,7 @@ function render(){
     ?prev.teamB
     :'TRE';
 
-  $('#venue').innerHTML='<option value="">All venues</option>'+
+  $('#venue').innerHTML='<option value="">Auto venue context</option>'+
     D.analytics.venues.map(v=>`<option>${v.venue}</option>`).join('');
   if(prev.venue && D.analytics.venues.some(v=>v.venue===prev.venue)){
     $('#venue').value=prev.venue;
